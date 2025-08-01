@@ -1,0 +1,182 @@
+{
+  "name": "cometix-tab",
+  "displayName": "Cometix-Tab",
+  "description": "Cursor AI",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.102.0"
+  },
+  "categories": [
+    "Machine Learning",
+    "Snippets",
+    "Programming Languages"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cometix-tab.toggleEnabled",
+        "title": "Toggle Enabled",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.showLogs",
+        "title": "Show Logs",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.showStatusMenu",
+        "title": "Show Status Menu",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.openConfiguration",
+        "title": "Open Configuration Guide",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.debugAuth",
+        "title": "Debug Authentication",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.debugCompletion",
+        "title": "Debug Code Completion",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.testGhostText",
+        "title": "Test Ghost Text",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.testDiffAlgorithm",
+        "title": "Test Diff Algorithm",
+        "category": "Cometix Tab"
+      }
+    ],
+    "configuration": {
+      "title": "Cometix Tab",
+      "properties": {
+        "cometixTab.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable/disable Cometix Tab AI code completion"
+        },
+        "cometixTab.endpointType": {
+          "type": "string",
+          "enum": [
+            "official",
+            "selfhosted"
+          ],
+          "enumDescriptions": [
+            "Official api2.cursor.sh endpoint (Connect RPC format)",
+            "Self-hosted cursor-api endpoint (REST format)"
+          ],
+          "default": "official",
+          "description": "Choose between official Cursor API or self-hosted cursor-api"
+        },
+        "cometixTab.serverUrl": {
+          "type": "string",
+          "default": "https://api2.cursor.sh",
+          "description": "Cursor API server URL (will use default based on endpoint type if empty)"
+        },
+        "cometixTab.authToken": {
+          "type": "string",
+          "default": "",
+          "description": "Authentication token for Cursor API"
+        },
+        "cometixTab.clientKey": {
+          "type": "string",
+          "default": "",
+          "description": "Client key/checksum for authentication (auto-generated). For official endpoint, this is x-cursor-checksum; for self-hosted, this is x-client-key."
+        },
+        "cometixTab.gcppHost": {
+          "type": "string",
+          "enum": [
+            "US",
+            "EU",
+            "Asia"
+          ],
+          "default": "US",
+          "description": "GCPP host region"
+        },
+        "cometixTab.model": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "fast",
+            "advanced"
+          ],
+          "default": "auto",
+          "description": "AI completion model selection"
+        },
+        "cometixTab.snoozeUntil": {
+          "type": "number",
+          "default": 0,
+          "description": "Snooze completion until timestamp (internal use)"
+        },
+        "cometixTab.maxCompletionLength": {
+          "type": "number",
+          "default": 1000,
+          "minimum": 100,
+          "maximum": 5000,
+          "description": "Maximum completion length in tokens"
+        },
+        "cometixTab.debounceMs": {
+          "type": "number",
+          "default": 300,
+          "minimum": 100,
+          "maximum": 2000,
+          "description": "Debounce delay for file sync (milliseconds)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "pnpm run package",
+    "compile": "pnpm run check-types && pnpm run lint && node esbuild.js",
+    "watch": "npm-run-all -p watch:*",
+    "watch:esbuild": "node esbuild.js --watch",
+    "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
+    "package": "pnpm run check-types && pnpm run lint && node esbuild.js --production",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
+    "check-types": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vscode-test",
+    "proto:gen": "pnpm run proto:clean && pnpm run proto:gen-es && pnpm run proto:gen-connect",
+    "proto:clean": "rm -rf src/generated",
+    "proto:gen-es": "protoc --plugin=./node_modules/.bin/protoc-gen-es --es_out=src/generated --es_opt=target=ts --proto_path=src/proto src/proto/*.proto",
+    "proto:gen-connect": "protoc --plugin=./node_modules/.bin/protoc-gen-connect-es --connect-es_out=src/generated --connect-es_opt=target=ts --proto_path=src/proto src/proto/*.proto"
+  },
+  "devDependencies": {
+    "@bufbuild/protoc-gen-es": "1.10.0",
+    "@connectrpc/protoc-gen-connect-es": "^1.6.0",
+    "@types/crypto-js": "^4.2.2",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "20.x",
+    "@types/vscode": "^1.102.0",
+    "@typescript-eslint/eslint-plugin": "^8.31.1",
+    "@typescript-eslint/parser": "^8.31.1",
+    "@vscode/test-cli": "^0.0.11",
+    "@vscode/test-electron": "^2.5.2",
+    "esbuild": "^0.25.3",
+    "eslint": "^9.25.1",
+    "npm-run-all": "^4.1.5",
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "1.10.0",
+    "@connectrpc/connect": "1.6.1",
+    "@connectrpc/connect-web": "1.6.1",
+    "crypto-js": "^4.2.0",
+    "diff": "^8.0.2",
+    "protobufjs": "^7.5.3"
+  },
+  "packageManager": "pnpm@10.12.4+sha512.5ea8b0deed94ed68691c9bad4c955492705c5eeb8a87ef86bc62c74a26b037b08ff9570f108b2e4dbd1dd1a9186fea925e527f141c648e85af45631074680184"
+}

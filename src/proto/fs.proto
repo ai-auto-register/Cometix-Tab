@@ -1,0 +1,116 @@
+syntax = "proto3";
+package aiserver.v1;
+import "google/protobuf/timestamp.proto";
+import "cpp.proto";
+// @version: 1.3.3~1.3.4
+// @author: wisdgod nav@wisdgod.com
+// @license: MIT OR Apache-2.0
+enum FSUploadErrorType { // aiserver.v1.FSUploadErrorType
+	FS_UPLOAD_ERROR_TYPE_UNSPECIFIED = 0;
+	FS_UPLOAD_ERROR_TYPE_NON_EXISTANT = 1;
+	FS_UPLOAD_ERROR_TYPE_HASH_MISMATCH = 2;
+}
+enum FSSyncErrorType { // aiserver.v1.FSSyncErrorType
+	FS_SYNC_ERROR_TYPE_UNSPECIFIED = 0;
+	FS_SYNC_ERROR_TYPE_NON_EXISTANT = 1;
+	FS_SYNC_ERROR_TYPE_HASH_MISMATCH = 2;
+}
+message FSUploadFileRequest { // aiserver.v1.FSUploadFileRequest
+	string uuid = 1;
+	string relative_workspace_path = 2;
+	string contents = 3;
+	int32 model_version = 4;
+	optional string sha256_hash = 5;
+}
+message FSUploadFileResponse { // aiserver.v1.FSUploadFileResponse
+	FSUploadErrorType error = 1;
+}
+// FilesyncUpdateWithModelVersion and SingleUpdateRequest are imported from cpp.proto
+message FSSyncFileRequest { // aiserver.v1.FSSyncFileRequest
+	string uuid = 1;
+	string relative_workspace_path = 2;
+	int32 model_version = 3;
+	repeated FilesyncUpdateWithModelVersion filesync_updates = 4;
+	string sha256_hash = 5;
+}
+message FSSyncFileResponse { // aiserver.v1.FSSyncFileResponse
+	FSSyncErrorType error = 1;
+}
+message FSIsEnabledForUserRequest { // aiserver.v1.FSIsEnabledForUserRequest
+	string uuid = 1;
+}
+message FSIsEnabledForUserResponse { // aiserver.v1.FSIsEnabledForUserResponse
+	bool enabled = 1;
+}
+message FSGetFileContentsRequest { // aiserver.v1.FSGetFileContentsRequest
+	string uuid = 1;
+	string auth_id = 2;
+	string relative_workspace_path = 3;
+	int32 model_version = 4;
+	repeated FilesyncUpdateWithModelVersion filesync_updates = 5;
+	optional string sha256_hash = 6;
+}
+message FSGetFileContentsResponse { // aiserver.v1.FSGetFileContentsResponse
+	string contents = 1;
+	optional string sha256_hash = 2;
+}
+message FileRequest { // aiserver.v1.FileRequest
+	string relative_workspace_path = 1;
+	optional int32 requested_version = 2;
+	optional string sha256_hash = 3;
+	bool required = 4;
+}
+message FSGetMultiFileContentsRequest { // aiserver.v1.FSGetMultiFileContentsRequest
+	string auth_id = 1;
+	repeated FilesyncUpdateWithModelVersion filesync_updates = 2;
+	repeated FileRequest file_requests = 3;
+	bool get_all_recent_files = 4;
+}
+message FileRetrieved { // aiserver.v1.FileRetrieved
+	string relative_workspace_path = 1;
+	string contents = 2;
+	int32 model_version = 3;
+	google.protobuf.Timestamp last_modified = 4;
+}
+message FSGetMultiFileContentsResponse { // aiserver.v1.FSGetMultiFileContentsResponse
+	repeated FileRetrieved files = 1;
+}
+message FSInternalHealthCheckRequest { // aiserver.v1.FSInternalHealthCheckRequest
+	optional bool from_server = 1;
+}
+message FSInternalHealthCheckResponse { // aiserver.v1.FSInternalHealthCheckResponse
+	bool success = 1;
+}
+message FSConfigRequest { // aiserver.v1.FSConfigRequest
+}
+message FSConfigResponse { // aiserver.v1.FSConfigResponse
+	float check_filesync_hash_percent = 1;
+	optional int32 rate_limiter_breaker_reset_time_ms = 2;
+	optional int32 rate_limiter_rps = 3;
+	optional int32 rate_limiter_burst_capacity = 4;
+	optional int32 max_recent_updates_stored = 5;
+	optional int32 max_model_version_cache_size = 6;
+	optional int32 max_file_size_to_sync_bytes = 7;
+	optional int32 sync_retry_max_attempts = 8;
+	optional int32 sync_retry_initial_delay_ms = 9;
+	optional int32 sync_retry_time_multiplier = 10;
+	optional int32 file_sync_status_max_cache_size = 11;
+	optional int32 successive_syncs_required_for_reliance = 12;
+	optional int32 extra_successful_syncs_needed_after_errors = 13;
+	optional int32 big_change_stripping_threshold_bytes = 14;
+	optional int32 last_n_updates_to_send = 15;
+	optional int32 file_sync_status_ttl_ms = 16;
+	optional int32 sync_debounce_ms = 17;
+	optional int32 sync_update_threshold = 18;
+}
+service FileSyncService {
+	rpc FSUploadFile(FSUploadFileRequest) returns (FSUploadFileResponse) {} // Unary
+	rpc FSSyncFile(FSSyncFileRequest) returns (FSSyncFileResponse) {} // Unary
+	rpc FSIsEnabledForUser(FSIsEnabledForUserRequest) returns (FSIsEnabledForUserResponse) {} // Unary
+	rpc FSConfig(FSConfigRequest) returns (FSConfigResponse) {} // Unary
+	rpc FSGetFileContents(FSGetFileContentsRequest) returns (FSGetFileContentsResponse) {} // Unary
+	rpc FSGetMultiFileContents(FSGetMultiFileContentsRequest) returns (FSGetMultiFileContentsResponse) {} // Unary
+	rpc FSInternalSyncFile(FSSyncFileRequest) returns (FSSyncFileResponse) {} // Unary
+	rpc FSInternalUploadFile(FSUploadFileRequest) returns (FSUploadFileResponse) {} // Unary
+	rpc FSInternalHealthCheck(FSInternalHealthCheckRequest) returns (FSInternalHealthCheckResponse) {} // Unary
+}
