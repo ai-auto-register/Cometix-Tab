@@ -2,10 +2,20 @@
   "name": "cometix-tab",
   "displayName": "Cometix-Tab",
   "description": "Cursor AI",
+  "publisher": "Haleclipse",
+  "icon": "icons/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Haleclipse/Cometix-Tab.git"
+  },
+  "license": "MIT",
   "version": "0.0.1",
   "engines": {
     "vscode": "^1.102.0"
   },
+  "enabledApiProposals": [
+    "inlineCompletionsAdditions"
+  ],
   "categories": [
     "Machine Learning",
     "Snippets",
@@ -48,14 +58,63 @@
         "category": "Cometix Tab"
       },
       {
+        "command": "cometix-tab.debugEditHistory",
+        "title": "Debug Edit History",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.debugSmartEdit",
+        "title": "Debug Smart Edit Detection",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.showPerformanceReport",
+        "title": "Show Performance Report",
+        "category": "Cometix Tab"
+      },
+      {
         "command": "cometix-tab.testGhostText",
         "title": "Test Ghost Text",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.testSimpleInsert",
+        "title": "Test Simple Insert",
         "category": "Cometix Tab"
       },
       {
         "command": "cometix-tab.testDiffAlgorithm",
         "title": "Test Diff Algorithm",
         "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.testFileDiff",
+        "title": "Test File Diff Histories",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.setLogLevel",
+        "title": "Set Log Level",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.refreshCppConfig",
+        "title": "Refresh Server Configuration",
+        "category": "Cometix Tab"
+      },
+      {
+        "command": "cometix-tab.manualTriggerCompletion",
+        "title": "Manual Trigger Code Completion",
+        "category": "Cometix Tab"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "cometix-tab.manualTriggerCompletion",
+        "key": "alt+\\",
+        "mac": "option+\\",
+        "when": "editorTextFocus && !editorReadonly",
+        "description": "Manual trigger AI code completion (GitHub Copilot style: Alt+\\)"
       }
     ],
     "configuration": {
@@ -132,6 +191,94 @@
           "minimum": 100,
           "maximum": 2000,
           "description": "Debounce delay for file sync (milliseconds)"
+        },
+        "cometixTab.logLevel": {
+          "type": "string",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "enumDescriptions": [
+            "Debug - Show all logs including detailed debugging information",
+            "Info - Show general information and above",
+            "Warn - Show warnings and errors only",
+            "Error - Show errors only"
+          ],
+          "default": "info",
+          "description": "Log level for Cometix Tab extension"
+        },
+        "cometixTab.contextRadius": {
+          "type": "object",
+          "properties": {
+            "above": {
+              "type": "number",
+              "default": 50,
+              "minimum": 0,
+              "maximum": 200
+            },
+            "below": {
+              "type": "number", 
+              "default": 50,
+              "minimum": 0,
+              "maximum": 200
+            }
+          },
+          "default": {
+            "above": 50,
+            "below": 50
+          },
+          "description": "Context radius for code completion (lines above/below cursor)"
+        },
+        "cometixTab.ghostTextMode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable ghost text mode for completions (from server config)"
+        },
+        "cometixTab.enabledHeuristics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Enabled heuristics for code completion (from server config)"
+        },
+        "cometixTab.triggerConfig": {
+          "type": "object",
+          "properties": {
+            "commaTriggersCompletion": {
+              "type": "boolean",
+              "default": true,
+              "description": "Enable completion trigger after comma (,)"
+            },
+            "newLineHighConfidence": {
+              "type": "boolean", 
+              "default": true,
+              "description": "High confidence completion on new empty lines"
+            },
+            "lineEndHighConfidence": {
+              "type": "boolean",
+              "default": true, 
+              "description": "High confidence completion at line end positions"
+            },
+            "customTriggerChars": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "maxLength": 2
+              },
+              "default": [],
+              "description": "Additional custom trigger characters (max 2 chars each)"
+            }
+          },
+          "default": {
+            "commaTriggersCompletion": true,
+            "newLineHighConfidence": true,
+            "lineEndHighConfidence": true,
+            "customTriggerChars": []
+          },
+          "description": "Advanced trigger configuration for code completion"
         }
       }
     }
@@ -143,6 +290,7 @@
     "watch:esbuild": "node esbuild.js --watch",
     "watch:tsc": "tsc --noEmit --watch --project tsconfig.json",
     "package": "pnpm run check-types && pnpm run lint && node esbuild.js --production",
+    "package:vsix": "vsce package --no-dependencies -o dist/",
     "compile-tests": "tsc -p . --outDir out",
     "watch-tests": "tsc -p . -w --outDir out",
     "pretest": "pnpm run compile-tests && pnpm run compile && pnpm run lint",
@@ -165,6 +313,7 @@
     "@typescript-eslint/parser": "^8.31.1",
     "@vscode/test-cli": "^0.0.11",
     "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.6.0",
     "esbuild": "^0.25.3",
     "eslint": "^9.25.1",
     "npm-run-all": "^4.1.5",

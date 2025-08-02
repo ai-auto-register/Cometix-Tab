@@ -12,3 +12,12 @@ vsc-extension-quickstart.md
 **/*.map
 **/*.ts
 **/.vscode-test.*
+
+# Project-specific files and directories
+ref/
+TODO.md
+cursor_extension_todo.md
+cursor_extension_prd.md
+.claude/
+docs/
+CLAUDE.md

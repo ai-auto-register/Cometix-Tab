@@ -3,6 +3,7 @@ import tsParser from "@typescript-eslint/parser";
 
 export default [{
     files: ["**/*.ts"],
+    ignores: ["src/generated/**/*"], // 忽略protobuf生成的文件
 }, {
     plugins: {
         "@typescript-eslint": typescriptEslint,
@@ -20,7 +21,7 @@ export default [{
             format: ["camelCase", "PascalCase"],
         }],
 
-        curly: "warn",
+        // curly: "warn", // 禁用大括号强制要求
         eqeqeq: "warn",
         "no-throw-literal": "warn",
         semi: "warn",
