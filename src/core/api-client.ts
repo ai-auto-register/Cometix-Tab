@@ -6,6 +6,7 @@ import { ConnectRpcClient } from '../utils/connect-rpc-client';
 import { ConnectRpcApiClient } from './connect-rpc-api-client';
 import { StreamCppResponse } from '../generated/cpp_pb';
 import { ConfigManager } from '../utils/config';
+import { WorkspaceManager } from '../utils/workspace-manager';
 
 /**
  * Cursor API客户端 - 支持两种实现方式
@@ -86,8 +87,8 @@ export class CursorApiClient {
       this.logger.debug(`📊 文件大小: ${fileInfo.content.length} 字符`);
       
       if (this.useConnectRpc && this.connectRpcApiClient) {
-        // 使用 Connect RPC 实现 - 🔧 传递固定的 workspaceId
-        const workspaceId = "a-b-c-d-e-f-g"; // 与 StreamCpp 保持一致
+        // 使用 Connect RPC 实现 - 🔧 使用统一的工作区ID
+        const workspaceId = WorkspaceManager.getInstance().getWorkspaceId();
         const response = await this.connectRpcApiClient.uploadFile(fileInfo, workspaceId);
         this.logger.info(`✅ Connect RPC 文件上传成功: ${fileInfo.path}`);
         return true;
@@ -117,15 +118,60 @@ export class CursorApiClient {
   
   /**
    * 同步文件到cursor-api服务器（增量更新）
-   * TODO: 实现FSSyncFile接口
+   * 实现智能的增量同步逻辑
    */
   async syncFile(fileInfo: FileInfo): Promise<boolean> {
     try {
-      this.logger.info(`🔄 文件同步功能尚未实现: ${fileInfo.path}`);
-      // 目前使用uploadFile作为fallback
-      return await this.uploadFile(fileInfo);
+      this.logger.info(`🔄 开始智能文件同步: ${fileInfo.path}`);
+      
+      if (this.useConnectRpc && this.connectRpcApiClient) {
+        // 使用 Connect RPC 实现增量同步
+        const workspaceId = WorkspaceManager.getInstance().getWorkspaceId();
+        
+        // 检查是否可以进行增量同步
+        const lastContent = this.connectRpcApiClient.getFileSyncStateManager().getLastSyncedContent(fileInfo.path);
+        const canSync = this.connectRpcApiClient.getFileSyncStateManager().canPerformIncrementalSync(fileInfo.path);
+        
+        if (canSync && lastContent) {
+          this.logger.info(`🔧 使用增量同步模式: ${fileInfo.path}`);
+          try {
+            const response = await this.connectRpcApiClient.syncFile(fileInfo, workspaceId, lastContent);
+            this.logger.info(`✅ Connect RPC 增量同步成功: ${fileInfo.path}`);
+            return true;
+          } catch (syncError) {
+            this.logger.warn(`⚠️ 增量同步失败，回退到完整上传: ${syncError}`);
+            // 回退到完整上传
+            const uploadResponse = await this.connectRpcApiClient.uploadFile(fileInfo, workspaceId);
+            this.logger.info(`✅ 回退上传成功: ${fileInfo.path}`);
+            return true;
+          }
+        } else {
+          this.logger.info(`📤 文件未曾同步，使用完整上传: ${fileInfo.path}`);
+          const response = await this.connectRpcApiClient.uploadFile(fileInfo, workspaceId);
+          this.logger.info(`✅ Connect RPC 完整上传成功: ${fileInfo.path}`);
+          return true;
+        }
+      } else if (!this.useConnectRpc && this.connectRpcClient) {
+        // 传统实现不支持增量同步，使用完整上传
+        this.logger.info(`📤 传统模式不支持增量同步，使用完整上传: ${fileInfo.path}`);
+        const uuid = CryptoUtils.generateUUID();
+        const result = await this.connectRpcClient.uploadFile(fileInfo, uuid, {
+          encoding: 'json',
+          timeout: 15000
+        });
+        
+        if (!result.success) {
+          throw new Error(result.error || '未知错误');
+        }
+        
+        this.logger.info(`✅ 传统模式上传成功: ${fileInfo.path}`);
+        return true;
+      } else {
+        throw new Error('客户端未正确初始化');
+      }
+      
     } catch (error) {
-      this.logger.error(`❌ 文件同步失败: ${fileInfo.path}`, error as Error);
+      this.logger.error(`❌ 智能文件同步失败: ${fileInfo.path}`, error as Error);
       return false;
     }
   }
@@ -260,6 +306,79 @@ export class CursorApiClient {
         success: false,
         message: `❌ 连接测试异常: ${(error as Error).message}`
       };
+    }
+  }
+
+  /**
+   * 🚀 获取可用模型列表
+   */
+  async getAvailableModels(forceRefresh: boolean = false): Promise<{ models: string[]; defaultModel?: string } | null> {
+    try {
+      this.logger.info('🔍 获取可用模型列表');
+      
+      if (this.useConnectRpc && this.connectRpcApiClient) {
+        // 使用 Connect RPC 实现
+        const response = await this.connectRpcApiClient.getAvailableModels(forceRefresh);
+        if (response) {
+          return {
+            models: response.models,
+            defaultModel: response.defaultModel
+          };
+        }
+        return null;
+      } else if (!this.useConnectRpc && this.connectRpcClient) {
+        // 使用手动实现（暂时返回null，可以后续实现）
+        this.logger.warn('⚠️ 手动实现暂不支持获取可用模型列表');
+        return null;
+      } else {
+        return null;
+      }
+      
+    } catch (error) {
+      this.logger.error('❌ 获取可用模型列表失败', error as Error);
+      return null;
+    }
+  }
+
+  /**
+   * 🎯 记录补全结果（用户接受/拒绝的反馈）
+   */
+  async recordCppFate(requestId: string, fate: 'accept' | 'reject' | 'partial_accept', performanceTime?: number): Promise<boolean> {
+    try {
+      this.logger.info(`📊 记录补全结果: ${requestId} -> ${fate}`);
+      
+      if (this.useConnectRpc && this.connectRpcApiClient) {
+        // 使用 Connect RPC 实现
+        // 导入 CppFate 枚举
+        const { CppFate } = await import('../generated/cpp_pb.js');
+        
+        // 直接调用对应的方法
+        let response;
+        switch (fate) {
+          case 'accept':
+            response = await this.connectRpcApiClient.recordCppFate(requestId, CppFate.ACCEPT, performanceTime);
+            break;
+          case 'reject':
+            response = await this.connectRpcApiClient.recordCppFate(requestId, CppFate.REJECT, performanceTime);
+            break;
+          case 'partial_accept':
+            response = await this.connectRpcApiClient.recordCppFate(requestId, CppFate.PARTIAL_ACCEPT, performanceTime);
+            break;
+          default:
+            response = await this.connectRpcApiClient.recordCppFate(requestId, CppFate.UNSPECIFIED, performanceTime);
+        }
+        return response !== null;
+      } else if (!this.useConnectRpc && this.connectRpcClient) {
+        // 使用手动实现（暂时不支持）
+        this.logger.warn('⚠️ 手动实现暂不支持记录补全结果');
+        return false;
+      } else {
+        return false;
+      }
+      
+    } catch (error) {
+      this.logger.error('❌ 记录补全结果失败', error as Error);
+      return false;
     }
   }
   

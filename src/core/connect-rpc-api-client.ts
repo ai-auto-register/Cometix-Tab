@@ -6,7 +6,7 @@
 
 import { createPromiseClient, type PromiseClient } from "@connectrpc/connect";
 import { createConnectTransport } from "@connectrpc/connect-web";
-import { AiService } from "../generated/cpp_connect";
+import { AiService, CppService } from "../generated/cpp_connect";
 import { FileSyncService } from "../generated/fs_connect";
 import { 
   StreamCppRequest, 
@@ -15,20 +15,36 @@ import {
   CursorPosition,
   CppContextItem,
   AdditionalFile,
-  CppIntentInfo
+  CppIntentInfo,
+  CppFileDiffHistory,
+  CppConfigRequest,
+  CppConfigResponse,
+  AvailableCppModelsRequest,
+  AvailableCppModelsResponse,
+  RecordCppFateRequest,
+  RecordCppFateResponse,
+  CppFate
 } from "../generated/cpp_pb";
 import { 
   FSUploadFileRequest, 
-  FSUploadFileResponse 
+  FSUploadFileResponse,
+  FSSyncFileRequest,
+  FSSyncFileResponse,
+  FSUploadErrorType,
+  FSSyncErrorType
 } from "../generated/fs_pb";
 
 import type { CursorConfig, CompletionRequest, FileInfo } from '../types';
 import { Logger } from '../utils/logger';
 import { CryptoUtils } from '../utils/crypto';
+import { FileDiffCalculator } from '../utils/file-diff';
 import { AuthHelper } from '../utils/auth-helper';
 import { getOrGenerateClientKey, validateChecksum } from '../utils/checksum';
 import { FileSyncStateManager } from './filesync-state-manager';
+import { WorkspaceManager } from '../utils/workspace-manager';
+import { EditHistoryTracker } from './edit-history-tracker';
 import * as vscode from 'vscode';
+import * as path from 'path';
 
 export interface ConnectRpcApiClientOptions {
   baseUrl: string;
@@ -47,11 +63,24 @@ export interface ConnectRpcApiClientOptions {
 export class ConnectRpcApiClient {
   private logger: Logger;
   private aiClient: PromiseClient<typeof AiService>;
+  private cppClient: PromiseClient<typeof CppService>;
   private fileSyncClient: PromiseClient<typeof FileSyncService>;
   private filesyncCookie: string;
   private filesyncClientKey: string; // 添加 FileSyncService 专用的客户端密钥
+  private fileDiffCalculator: FileDiffCalculator; // 文件差异计算器
   private options: ConnectRpcApiClientOptions;
   private fileSyncStateManager: FileSyncStateManager; // 🔧 添加文件同步状态管理
+  private workspaceManager: WorkspaceManager; // 🔧 添加工作区管理器
+  private editHistoryTracker: EditHistoryTracker; // 🔧 添加编辑历史跟踪器
+  private cachedCppConfig: CppConfigResponse | null = null; // 🔧 缓存的CppConfig配置
+  private configLastFetched: number = 0; // 🔧 最后获取配置的时间
+  private readonly CONFIG_CACHE_TTL = 5 * 60 * 1000; // 🔧 配置缓存5分钟
+  
+  // 🚀 AvailableModels API 缓存
+  private cachedAvailableModels: AvailableCppModelsResponse | null = null;
+  private modelsLastFetched: number = 0;
+  private readonly MODELS_CACHE_TTL = 10 * 60 * 1000; // 模型缓存10分钟
+  private pendingUploads = new Set<string>(); // 🔧 跟踪正在进行的文件上传
 
   constructor(options: ConnectRpcApiClientOptions) {
     this.logger = Logger.getInstance();
@@ -59,11 +88,14 @@ export class ConnectRpcApiClient {
     this.filesyncCookie = CryptoUtils.generateFilesyncCookie();
     this.filesyncClientKey = CryptoUtils.generateClientKey(); // 生成 FileSyncService 专用的客户端密钥
     this.fileSyncStateManager = new FileSyncStateManager(); // 🔧 初始化文件同步状态管理
+    this.workspaceManager = WorkspaceManager.getInstance(); // 🔧 初始化工作区管理器
+    this.editHistoryTracker = new EditHistoryTracker(); // 🔧 初始化编辑历史跟踪器
+    this.fileDiffCalculator = new FileDiffCalculator(); // 🔧 初始化文件差异计算器
 
     // 创建 Connect RPC 传输层
     const transport = createConnectTransport({
       baseUrl: options.baseUrl,
-      defaultTimeoutMs: options.timeout || 15000, // 减少超时时间到15秒
+      defaultTimeoutMs: options.timeout || 10000, // 减少超时时间到10秒
       interceptors: [
         // 响应拦截器 - 记录HTTP响应状态和内容
         (next) => async (req) => {
@@ -141,7 +173,7 @@ export class ConnectRpcApiClient {
           
           // 设置认证头部
           req.header.set("authorization", `Bearer ${options.authToken}`);
-          req.header.set("x-cursor-client-version", "1.3.6");
+          req.header.set("x-cursor-client-version", "1.6.1-connectrpc");
           
           // 🧪 实验：测试是否真的需要checksum
           const SKIP_CHECKSUM = false; // cursor-api需要checksum头部进行认证
@@ -206,7 +238,7 @@ export class ConnectRpcApiClient {
           
           // 设置认证头部
           req.header.set("authorization", `Bearer ${options.authToken}`);
-          req.header.set("x-cursor-client-version", "1.3.6");
+          req.header.set("x-cursor-client-version", "1.6.1-connectrpc");
           req.header.set("x-cursor-checksum", checksum);
           
           // 🔑 关键：添加 FileSyncService 所需的认证头部
@@ -240,7 +272,11 @@ export class ConnectRpcApiClient {
 
     // 创建类型安全的服务客户端
     this.aiClient = createPromiseClient(AiService, transport);
+    this.cppClient = createPromiseClient(CppService, transport);
     this.fileSyncClient = createPromiseClient(FileSyncService, fileSyncTransport);
+
+    // 初始化已打开的文档
+    this.editHistoryTracker.initializeOpenDocuments();
 
     this.logger.info('✅ Connect RPC 客户端初始化完成');
   }
@@ -271,42 +307,127 @@ export class ConnectRpcApiClient {
       this.logger.info(`  🎯 request.modelName: ${request.modelName || '未设置'}`);
       this.logger.info(`  📚 request.additionalFiles: ${request.additionalFiles?.length || 0} 个文件`);
 
-      // 🔧 获取真实的工作区根路径
-      let workspaceRootPath = '';
+      // 🔧 使用统一的工作区管理器获取工作区路径和ID
+      const workspaceRootPath = this.workspaceManager.getCurrentWorkspacePath();
+      const workspaceId = this.workspaceManager.getWorkspaceId();
       const currentFilePath = request.currentFile.path || 'unknown.ts';
       
-      // 尝试从当前活动文档获取工作区信息
-      if (vscode.window.activeTextEditor) {
-        const workspaceFolder = vscode.workspace.getWorkspaceFolder(vscode.window.activeTextEditor.document.uri);
-        if (workspaceFolder) {
-          workspaceRootPath = workspaceFolder.uri.fsPath;
-          this.logger.debug(`🔍 获取到工作区根路径: ${workspaceRootPath}`);
-        }
-      }
-      
-      // 如果没有获取到，使用第一个工作区文件夹
-      if (!workspaceRootPath && vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders.length > 0) {
-        workspaceRootPath = vscode.workspace.workspaceFolders[0].uri.fsPath;
-        this.logger.debug(`🔍 使用第一个工作区文件夹: ${workspaceRootPath}`);
-      }
-      
-      // 如果仍然没有，使用当前文件的目录
-      if (!workspaceRootPath) {
-        workspaceRootPath = process.cwd();
-        this.logger.warn(`⚠️ 无法获取工作区路径，使用当前工作目录: ${workspaceRootPath}`);
-      }
-
-      // 🔧 智能选择文件同步模式或纯内容模式
-      const workspaceId = "a-b-c-d-e-f-g"; // （固定工作区ID）
+      this.logger.info(`🆔 使用工作区ID: ${workspaceId}`);
+      this.logger.info(`📁 工作区路径: ${workspaceRootPath}`);
       const currentFileInfo = request.currentFile;
       
       // 🔍 检查是否可以使用文件同步模式
-      const canUseFileSync = this.fileSyncStateManager.isFileSynced(currentFileInfo, workspaceId);
-      const versionInfo = canUseFileSync ? this.fileSyncStateManager.buildFileVersionInfo(currentFileInfo.path) : null;
+      // 🔄 恢复文件同步检查，但添加详细调试
+      // 🔧 修复：当有additionalFiles时禁用内容模式，因为服务器期望文件已同步
+      let canUseFileSync = this.fileSyncStateManager.isFileSynced(currentFileInfo, workspaceId);
+      
+      // 🚨 关键修复：动态处理additionalFiles
+      if (request.additionalFiles && request.additionalFiles.length > 0) {
+        this.logger.info(`🔍 发现 ${request.additionalFiles.length} 个附加文件，检查兼容性...`);
+        this.logger.debug(`📋 附加文件: ${request.additionalFiles.map(f => f.path).join(', ')}`);
+        
+        // 如果将使用内容模式，移除additionalFiles以避免"File not found"错误
+        if (!canUseFileSync) {
+          this.logger.warn(`⚠️ 内容模式不兼容附加文件，移除 ${request.additionalFiles.length} 个附加文件`);
+          request.additionalFiles = [];
+        } else {
+          this.logger.info(`✅ 文件同步模式，保留 ${request.additionalFiles.length} 个附加文件`);
+        }
+      }
+      this.logger.info(`🔍 文件同步检查结果: ${canUseFileSync ? '可使用文件同步' : '需要上传文件'}`);
+      if (!canUseFileSync) {
+        this.logger.info(`📋 文件同步状态详情:`);
+        const syncState = this.fileSyncStateManager.getFileSyncState(currentFileInfo.path);
+        if (syncState) {
+          this.logger.info(`  ✅ 已有同步状态: 版本=${syncState.modelVersion}, 哈希=${syncState.sha256Hash.substring(0, 16)}...`);
+          this.logger.info(`  🆔 工作区匹配: ${syncState.workspaceId === workspaceId}`);
+          this.logger.info(`  🔐 哈希匹配: ${syncState.sha256Hash === currentFileInfo.sha256}`);
+        } else {
+          this.logger.info(`  ❌ 无同步状态记录`);
+        }
+      }
+      let versionInfo = canUseFileSync ? this.fileSyncStateManager.buildFileVersionInfo(currentFileInfo.path) : null;
+      
+      // 🐛 调试文件同步状态
+      this.logger.debug(`🔍 文件同步状态调试:`);
+      this.logger.debug(`  📄 文件路径: ${currentFileInfo.path}`);
+      this.logger.debug(`  🆔 工作区ID: ${workspaceId}`);
+      this.logger.debug(`  🔐 文件哈希: ${currentFileInfo.sha256?.substring(0, 16)}...`);
+      this.logger.debug(`  ✅ canUseFileSync: ${canUseFileSync}`);
+      if (versionInfo) {
+        this.logger.debug(`  📝 版本信息: ${JSON.stringify(versionInfo)}`);
+      }
       
       this.logger.info(`🔄 文件同步模式: ${canUseFileSync ? '启用' : '禁用'}`);
       if (versionInfo) {
         this.logger.info(`📝 文件版本: ${versionInfo.fileVersion}, 哈希: ${versionInfo.sha256Hash.substring(0, 16)}...`);
+      }
+      
+      // 🔍 详细记录文件内容和同步设置
+      const fileContentLength = request.currentFile.content?.length || 0;
+      const willIncludeContent = !canUseFileSync;
+      this.logger.info(`📄 文件内容处理:`);
+      this.logger.info(`   📊 原始内容长度: ${fileContentLength} 字符`);
+      this.logger.info(`   📝 将包含内容: ${willIncludeContent}`);
+      this.logger.info(`   🔗 依赖文件同步: ${canUseFileSync}`);
+
+      // 🔧 强制使用内容模式进行测试
+      if (!canUseFileSync) {
+        this.logger.info('🧪 强制使用内容模式进行测试，跳过文件上传');
+        /*
+        try {
+          // 🔧 避免重复上传：检查是否已经有相同文件正在上传
+          const fileKey = `${workspaceId}:${currentFileInfo.path}:${currentFileInfo.sha256}`;
+          if (!this.pendingUploads.has(fileKey)) {
+            this.pendingUploads.add(fileKey);
+            try {
+              await this.uploadFile(currentFileInfo, workspaceId);
+              this.logger.info('✅ 文件上传完成，继续StreamCpp调用');
+            } finally {
+              this.pendingUploads.delete(fileKey);
+            }
+          } else {
+            this.logger.info('⏭️ 文件上传已在进行中，跳过重复上传');
+            // 等待一小段时间让上传完成
+            await new Promise(resolve => setTimeout(resolve, 100));
+          }
+          
+          // 🔧 修复：更新文件同步状态，避免重复请求
+          canUseFileSync = this.fileSyncStateManager.isFileSynced(currentFileInfo, workspaceId);
+          versionInfo = canUseFileSync ? this.fileSyncStateManager.buildFileVersionInfo(currentFileInfo.path) : null;
+          
+          if (canUseFileSync && versionInfo) {
+            this.logger.info(`🔄 文件同步状态已更新: 版本=${versionInfo.fileVersion}`);
+            this.logger.info(`✅ 切换到文件同步模式 - 将使用空内容 + rely_on_filesync=true`);
+          } else {
+            this.logger.warn('⚠️ 文件上传完成但同步状态未更新，将使用纯内容模式');
+          }
+        } catch (uploadError) {
+          this.logger.warn('⚠️ 文件上传失败，使用纯内容模式', uploadError as Error);
+          // 继续执行，使用纯内容模式
+        }
+        */
+      }
+
+      // 🔍 最终文件同步状态调试
+      this.logger.info(`📋 最终文件处理模式: ${canUseFileSync ? '文件同步模式' : '内容模式'}`);
+      if (canUseFileSync && versionInfo) {
+        this.logger.info(`  📦 将使用文件同步: relyOnFilesync=true, 文件版本=${versionInfo.fileVersion}`);
+        this.logger.info(`  📄 内容字段: 将省略 (空内容)`);
+      } else {
+        this.logger.info(`  📄 将使用完整内容: relyOnFilesync=false, 内容长度=${(request.currentFile.content || '').length}`);
+      }
+
+      // 🔧 获取编辑历史和意图
+      const fileName = path.basename(currentFilePath);
+      const fullFilePath = path.resolve(workspaceRootPath, currentFilePath);
+      const diffHistory = this.editHistoryTracker.buildDiffHistory(fullFilePath);
+      const editIntent = this.editHistoryTracker.getEditIntent(fullFilePath);
+
+      this.logger.info(`📝 编辑历史长度: ${diffHistory.length} 字符`);
+      this.logger.info(`🎯 编辑意图: ${editIntent}`);
+      if (diffHistory.length > 0) {
+        this.logger.debug(`📋 差异历史预览: ${diffHistory.substring(0, 100)}...`);
       }
 
       const streamRequest = new StreamCppRequest({
@@ -315,24 +436,36 @@ export class ConnectRpcApiClient {
         // 根据文件同步状态构建文件信息      
         currentFile: new CurrentFileInfo({
           relativeWorkspacePath: currentFilePath,
-          contents: canUseFileSync ? '' : (request.currentFile.content || ''), // 🔧 智能选择
+          // 🔧 关键修复：文件同步模式下完全省略contents字段，而不是设置为空字符串
+          ...(canUseFileSync ? {} : { contents: request.currentFile.content || '' }),
           cursorPosition: new CursorPosition({
             line: request.cursorPosition.line,
             column: request.cursorPosition.column
           }),
-          fileVersion: versionInfo?.fileVersion || 1,
+          // 🔧 修复版本号同步：如果使用文件同步，使用存储的版本；否则使用当前编辑版本
+          fileVersion: canUseFileSync && versionInfo ? versionInfo.fileVersion : this.editHistoryTracker.getFileVersion(currentFilePath),
           sha256Hash: versionInfo?.sha256Hash || (request.currentFile.sha256 || ''),
-          relyOnFilesync: canUseFileSync, // 🔧 动态设置
+          relyOnFilesync: canUseFileSync, // 🔧 根据文件同步状态自动设置
           languageId: this.getLanguageId(currentFilePath),
           totalNumberOfLines: (request.currentFile.content || '').split('\n').length,
           workspaceRootPath: workspaceRootPath,
           lineEnding: this.detectLineEnding(request.currentFile.content || '')
         }),
         
-        // CppIntentInfo - 必需字段
+        // 🔧 关键修复：添加 file_diff_histories 字段
+        fileDiffHistories: diffHistory ? [new CppFileDiffHistory({
+          fileName: fileName,
+          diffHistory: [diffHistory] // 转换为字符串数组
+        })] : [],
+        
+        // CppIntentInfo - 使用动态检测的编辑意图
         cppIntentInfo: new CppIntentInfo({
-          source: "typing"
+          source: editIntent
         }),
+        
+        // 🚀 关键增强：添加多文件上下文支持
+        contextItems: request.additionalFiles ? this.buildContextItems(request.additionalFiles) : [],
+        additionalFiles: request.additionalFiles ? this.buildAdditionalFiles(request.additionalFiles) : [],
         
         // 基础参数
         modelName: request.modelName || 'auto',
@@ -345,9 +478,10 @@ export class ConnectRpcApiClient {
       this.logger.info(`🆔 工作区ID: ${streamRequest.workspaceId}`);
       this.logger.info(`📄 文件路径: ${streamRequest.currentFile?.relativeWorkspacePath}`);
       this.logger.info(`🔤 语言ID: ${streamRequest.currentFile?.languageId}`);
-      this.logger.info(`📊 内容长度: ${streamRequest.currentFile?.contents?.length || 0} 字符`);
+      this.logger.info(`📊 内容长度: ${streamRequest.currentFile?.contents?.length || 0} 字符${canUseFileSync ? ' (文件同步模式:省略contents字段)' : ''}`);
       this.logger.info(`📚 上下文文件数: ${streamRequest.contextItems.length}, 附加文件数: ${streamRequest.additionalFiles.length}`);
       this.logger.info(`🎯 模型: ${streamRequest.modelName}`);
+      this.logger.info(`📝 差异历史条目数: ${streamRequest.fileDiffHistories.length}`);
       
       // 🔍 增强日志：详细的请求体内容调试
       this.logger.info('🔍 详细请求体信息:');
@@ -357,6 +491,7 @@ export class ConnectRpcApiClient {
       this.logger.info(`  🔄 依赖文件同步: ${streamRequest.currentFile?.relyOnFilesync}`);
       this.logger.info(`  📁 工作区根路径: ${streamRequest.currentFile?.workspaceRootPath}`);
       this.logger.info(`  📝 行结束符: ${JSON.stringify(streamRequest.currentFile?.lineEnding)}`);
+      this.logger.info(`  📊 文件版本: ${streamRequest.currentFile?.fileVersion} (${canUseFileSync ? '文件同步版本' : '编辑器版本'})`);
       this.logger.info(`  🚀 立即确认: ${streamRequest.immediatelyAck}`);
       this.logger.info(`  🧠 增强上下文: ${streamRequest.enableMoreContext}`);
       this.logger.info(`  🐛 调试模式: ${streamRequest.isDebug}`);
@@ -380,6 +515,18 @@ export class ConnectRpcApiClient {
       try {
         const serializedSize = streamRequest.toBinary().length;
         this.logger.info(`📦 序列化后请求体大小: ${serializedSize} 字节`);
+        
+        // 🔍 详细请求体调试 - 输出关键字段的实际值
+        this.logger.debug(`🔍 完整请求体调试:`);
+        this.logger.debug(`  workspaceId: "${streamRequest.workspaceId}"`);
+        this.logger.debug(`  currentFile.path: "${streamRequest.currentFile?.relativeWorkspacePath}"`);
+        this.logger.debug(`  currentFile.relyOnFilesync: ${streamRequest.currentFile?.relyOnFilesync}`);
+        this.logger.debug(`  currentFile.fileVersion: ${streamRequest.currentFile?.fileVersion}`);
+        this.logger.debug(`  currentFile.sha256Hash: "${streamRequest.currentFile?.sha256Hash?.substring(0, 16)}..."`);
+        this.logger.debug(`  currentFile.workspaceRootPath: "${streamRequest.currentFile?.workspaceRootPath}"`);
+        this.logger.debug(`  currentFile.content.length: ${streamRequest.currentFile?.contents?.length || 0}`);
+        this.logger.debug(`  additionalFiles.length: ${streamRequest.additionalFiles?.length || 0}`);
+        this.logger.debug(`  modelName: "${streamRequest.modelName}"`);
       } catch (serializeError) {
         this.logger.warn('⚠️ 无法计算请求体序列化大小', serializeError as Error);
       }
@@ -389,7 +536,7 @@ export class ConnectRpcApiClient {
       const timeoutId = setTimeout(() => {
         this.logger.debug('⏰ 流式请求超时，自动取消');
         timeoutController.abort();
-      }, 10000); // 10秒超时
+      }, 30000); // 30秒超时 - 给代码补全更多时间
 
       const combinedSignal = abortSignal ? 
         this.combineAbortSignals([abortSignal, timeoutController.signal]) :
@@ -406,11 +553,31 @@ export class ConnectRpcApiClient {
         for await (const response of stream) {
           responseCount++;
           
-          this.logger.debug('📨 收到 StreamCpp 响应:', {
-            count: responseCount,
-            text: response.text?.substring(0, 50) + '...',
-            doneStream: response.doneStream
-          });
+          this.logger.info(`📨 收到 StreamCpp 响应 #${responseCount}:`);
+          
+          // 🔍 详细调试：显示响应的所有字段
+          this.logger.debug(`🔍 响应详情:`);
+          this.logger.debug(`   text: ${response.text ? `"${response.text}"` : 'undefined/empty'}`);
+          this.logger.debug(`   doneStream: ${response.doneStream}`);
+          this.logger.debug(`   doneEdit: ${response.doneEdit}`);
+          this.logger.debug(`   beginEdit: ${response.beginEdit}`);
+          this.logger.debug(`   bindingId: ${response.bindingId || 'undefined'}`);
+          this.logger.debug(`   rangeToReplace: ${response.rangeToReplace ? JSON.stringify(response.rangeToReplace) : 'undefined'}`);
+          this.logger.debug(`   cursorPredictionTarget: ${response.cursorPredictionTarget ? JSON.stringify(response.cursorPredictionTarget) : 'undefined'}`);
+          this.logger.debug(`   modelInfo: ${response.modelInfo ? JSON.stringify(response.modelInfo) : 'undefined'}`);
+          
+          if (response.text) {
+            this.logger.info(`📝 补全文本:`);
+            this.logger.info(response.text);
+          } else {
+            this.logger.warn(`⚠️ 响应中没有text字段或text为空`);
+          }
+          if (response.doneStream) {
+            this.logger.info('✅ 流结束标记');
+          }
+          if (response.bindingId) {
+            this.logger.info(`🔗 绑定ID: ${response.bindingId}`);
+          }
           
           yield response;
           
@@ -485,12 +652,17 @@ export class ConnectRpcApiClient {
       this.logger.info(`📤 Connect RPC 上传文件: ${fileInfo.path}`);
       this.logger.info(`🆔 使用工作区ID: ${workspaceId}`);
       
+      // 🔍 版本号调试
+      const currentEditorVersion = this.editHistoryTracker.getFileVersion(fileInfo.path);
+      const uploadVersion = currentEditorVersion; // 🔧 修复：使用编辑器版本作为上传版本
+      this.logger.info(`📊 版本信息: 编辑器=${currentEditorVersion}, 上传=${uploadVersion}`);
+      
       const uuid = CryptoUtils.generateUUID();
       const uploadRequest = new FSUploadFileRequest({
         uuid: uuid,
         relativeWorkspacePath: fileInfo.path,
         contents: fileInfo.content || '',
-        modelVersion: fileInfo.modelVersion || 0,
+        modelVersion: uploadVersion, // 使用当前版本-1作为基准
         sha256Hash: fileInfo.sha256 || ''
         // 注意：workspaceId 不在 FSUploadFileRequest 中，需要通过其他方式传递
       });
@@ -504,8 +676,9 @@ export class ConnectRpcApiClient {
       this.logger.info('✅ Connect RPC 文件上传成功');
       this.logger.info(`📝 返回信息: 错误码=${response.error} (0=成功)`);
       
-      // 🔧 记录文件同步状态
-      this.fileSyncStateManager.recordUploadSuccess(fileInfo, workspaceId, uuid, response);
+      // 🔧 记录文件同步状态 (传递实际的模型版本)
+      const uploadedFileInfo = { ...fileInfo, modelVersion: uploadVersion };
+      this.fileSyncStateManager.recordUploadSuccess(uploadedFileInfo, workspaceId, uuid, response);
       
       return response;
       
@@ -513,6 +686,95 @@ export class ConnectRpcApiClient {
       this.logger.error(`❌ Connect RPC 文件上传失败: ${fileInfo.path}`, error as Error);
       throw error;
     }
+  }
+
+  /**
+   * 增量同步文件
+   * 使用 Connect RPC Unary 调用，发送文件差异而非完整内容
+   */
+  async syncFile(fileInfo: FileInfo, workspaceId: string, oldContent: string): Promise<FSSyncFileResponse> {
+    try {
+      this.logger.info(`🔄 Connect RPC 增量同步文件: ${fileInfo.path}`);
+      this.logger.info(`🆔 使用工作区ID: ${workspaceId}`);
+      
+      // 获取当前文件同步状态
+      const syncState = this.fileSyncStateManager.getFileSyncState(fileInfo.path);
+      if (!syncState) {
+        throw new Error('文件未曾上传，无法进行增量同步。请先调用 uploadFile');
+      }
+      
+      const currentModelVersion = syncState.modelVersion;
+      const newModelVersion = currentModelVersion + 1;
+      
+      this.logger.info(`📊 版本信息: 当前版本=${currentModelVersion}, 新版本=${newModelVersion}`);
+      this.logger.info(`📏 内容长度: 旧=${oldContent.length}, 新=${fileInfo.content.length}`);
+      
+      // 计算文件差异
+      const filesyncUpdate = this.fileDiffCalculator.buildFilesyncUpdate(
+        fileInfo.path,
+        oldContent,
+        fileInfo.content,
+        newModelVersion
+      );
+      
+      // 验证差异计算的正确性
+      const isValid = this.fileDiffCalculator.validateUpdates(
+        oldContent,
+        fileInfo.content,
+        filesyncUpdate.updates
+      );
+      
+      if (!isValid) {
+        throw new Error('差异计算验证失败，回退到完整上传');
+      }
+      
+      this.logger.info(`🔧 差异统计: ${filesyncUpdate.updates.length} 个更新，预期长度=${filesyncUpdate.expectedFileLength}`);
+      
+      // 生成UUID
+      const uuid = CryptoUtils.generateUUID();
+      
+      // 构建同步请求
+      const syncRequest = new FSSyncFileRequest({
+        uuid,
+        relativeWorkspacePath: fileInfo.path,
+        modelVersion: newModelVersion, // 🔧 修复：使用新版本而非当前版本
+        filesyncUpdates: [filesyncUpdate],
+        sha256Hash: fileInfo.sha256 || ''
+      });
+      
+      this.logger.info('📡 发送 Connect RPC FSSyncFile 请求');
+      this.logger.debug(`🔍 请求详情: UUID=${uuid}, 版本=${currentModelVersion}->${newModelVersion}`);
+      
+      const response = await this.fileSyncClient.fSSyncFile(syncRequest);
+      
+      this.logger.info('✅ Connect RPC 文件增量同步成功');
+      this.logger.info(`📝 返回信息: 错误码=${response.error} (0=成功)`);
+      
+      // 🔧 更新文件同步状态
+      const updatedFileInfo = { ...fileInfo, modelVersion: newModelVersion };
+      // 注意：FSSyncFileResponse 不包含UUID，我们使用请求中的UUID
+      // 将 FSSyncErrorType 转换为 FSUploadErrorType
+      const uploadErrorType = response.error === FSSyncErrorType.FS_SYNC_ERROR_TYPE_UNSPECIFIED 
+        ? FSUploadErrorType.FS_UPLOAD_ERROR_TYPE_UNSPECIFIED 
+        : FSUploadErrorType.FS_UPLOAD_ERROR_TYPE_HASH_MISMATCH;
+      const mockUploadResponse = new FSUploadFileResponse({ error: uploadErrorType });
+      this.fileSyncStateManager.recordUploadSuccess(updatedFileInfo, workspaceId, uuid, mockUploadResponse);
+      
+      return response;
+      
+    } catch (error) {
+      this.logger.error(`❌ Connect RPC 文件增量同步失败: ${fileInfo.path}`, error as Error);
+      this.logger.warn('💡 提示: 增量同步失败时可回退到完整上传 (uploadFile)');
+      throw error;
+    }
+  }
+
+  /**
+   * 获取文件同步状态管理器
+   * 用于检查增量同步状态
+   */
+  getFileSyncStateManager(): FileSyncStateManager {
+    return this.fileSyncStateManager;
   }
 
   /**
@@ -583,6 +845,13 @@ export class ConnectRpcApiClient {
   regenerateFilesyncClientKey(): void {
     this.filesyncClientKey = CryptoUtils.generateClientKey();
     this.logger.info('🔄 FileSyncService 客户端密钥已重新生成');
+  }
+
+  /**
+   * 获取 EditHistoryTracker 实例（用于调试）
+   */
+  getEditHistoryTracker(): EditHistoryTracker {
+    return this.editHistoryTracker;
   }
 
   private getLanguageId(filePath: string): string {
@@ -717,6 +986,14 @@ export class ConnectRpcApiClient {
   }
 
   /**
+   * 销毁客户端（清理资源）
+   */
+  public dispose(): void {
+    this.editHistoryTracker?.dispose();
+    this.logger.info('♻️ ConnectRpcApiClient 已销毁');
+  }
+
+  /**
    * 生成基于工作区路径的工作区ID
    * 参考 cursortab.nvim 的实现，使用类似 "a-b-c-d-e-f-g" 的格式
    */
@@ -739,5 +1016,195 @@ export class ConnectRpcApiClient {
     const workspaceId = parts.join('-');
     this.logger.debug(`🆔 生成工作区ID: ${workspaceId} (来自路径: ${workspaceRootPath})`);
     return workspaceId;
+  }
+
+  /**
+   * 获取CppConfig配置
+   * 支持缓存机制，避免频繁请求
+   */
+  async getCppConfig(forceRefresh: boolean = false): Promise<CppConfigResponse | null> {
+    const now = Date.now();
+    
+    // 检查缓存是否有效
+    if (!forceRefresh && this.cachedCppConfig && (now - this.configLastFetched) < this.CONFIG_CACHE_TTL) {
+      this.logger.debug('📋 使用缓存的CppConfig配置');
+      return this.cachedCppConfig;
+    }
+
+    try {
+      this.logger.info('🔍 获取CppConfig配置...');
+      
+      const request = new CppConfigRequest({});
+      const checksum = getOrGenerateClientKey();
+      
+      const response = await this.aiClient.cppConfig(request, {
+        headers: {
+          "authorization": `Bearer ${this.options.authToken}`,
+          "x-cursor-client-version": "1.6.1-connectrpc",
+          "x-cursor-checksum": checksum,
+          "User-Agent": "connectrpc/1.6.1"
+        }
+      });
+
+      this.cachedCppConfig = response;
+      this.configLastFetched = now;
+      
+      this.logger.info('✅ CppConfig配置获取成功');
+      this.logger.debug(`📋 配置详情: 上下文半径=${response.aboveRadius}/${response.belowRadius}, 启用=${response.isOn}, 幽灵文本=${response.isGhostText}`);
+      
+      return response;
+    } catch (error) {
+      this.logger.error('❌ 获取CppConfig配置失败', error as Error);
+      return null;
+    }
+  }
+
+  /**
+   * 🚀 获取可用模型列表 - AvailableModels API
+   */
+  async getAvailableModels(forceRefresh: boolean = false): Promise<AvailableCppModelsResponse | null> {
+    const now = Date.now();
+    
+    // 检查缓存是否有效
+    if (!forceRefresh && this.cachedAvailableModels && (now - this.modelsLastFetched) < this.MODELS_CACHE_TTL) {
+      this.logger.debug('📋 使用缓存的可用模型列表');
+      return this.cachedAvailableModels;
+    }
+
+    try {
+      this.logger.info('🔍 获取可用模型列表...');
+      
+      const request = new AvailableCppModelsRequest({});
+      const checksum = getOrGenerateClientKey();
+      
+      const response = await this.cppClient.availableModels(request, {
+        headers: {
+          "authorization": `Bearer ${this.options.authToken}`,
+          "x-cursor-client-version": "1.6.1-connectrpc",
+          "x-cursor-checksum": checksum,
+          "User-Agent": "connectrpc/1.6.1"
+        }
+      });
+
+      this.cachedAvailableModels = response;
+      this.modelsLastFetched = now;
+      
+      this.logger.info('✅ 可用模型列表获取成功');
+      this.logger.info(`📋 可用模型: ${response.models.join(', ')}`);
+      if (response.defaultModel) {
+        this.logger.info(`🎯 默认模型: ${response.defaultModel}`);
+      }
+      
+      return response;
+    } catch (error) {
+      this.logger.error('❌ 获取可用模型列表失败', error as Error);
+      return null;
+    }
+  }
+
+  /**
+   * 应用CppConfig配置到本地设置
+   */
+  async applyCppConfigToLocalSettings(config: CppConfigResponse): Promise<void> {
+    try {
+      this.logger.info('🔄 应用服务器配置到本地设置...');
+      
+      const vsCodeConfig = vscode.workspace.getConfiguration('cometixTab');
+      
+      // 应用相关配置
+      if (config.isOn !== undefined) {
+        await vsCodeConfig.update('enabled', config.isOn, vscode.ConfigurationTarget.Global);
+        this.logger.info(`📝 更新启用状态: ${config.isOn}`);
+      }
+      
+      if (config.aboveRadius !== undefined || config.belowRadius !== undefined) {
+        const contextRadius = {
+          above: config.aboveRadius || 50,
+          below: config.belowRadius || 50
+        };
+        await vsCodeConfig.update('contextRadius', contextRadius, vscode.ConfigurationTarget.Global);
+        this.logger.info(`📝 更新上下文半径: ${contextRadius.above}/${contextRadius.below}`);
+      }
+      
+      if (config.isGhostText !== undefined) {
+        await vsCodeConfig.update('ghostTextMode', config.isGhostText, vscode.ConfigurationTarget.Global);
+        this.logger.info(`📝 更新幽灵文本模式: ${config.isGhostText}`);
+      }
+      
+      // 应用启发式算法配置
+      if (config.heuristics && config.heuristics.length > 0) {
+        await vsCodeConfig.update('enabledHeuristics', config.heuristics, vscode.ConfigurationTarget.Global);
+        this.logger.info(`📝 更新启发式算法: ${config.heuristics.join(', ')}`);
+      }
+      
+      this.logger.info('✅ 服务器配置应用完成');
+    } catch (error) {
+      this.logger.error('❌ 应用配置失败', error as Error);
+    }
+  }
+
+  /**
+   * 初始化时获取并应用CppConfig配置
+   */
+  async initializeCppConfig(): Promise<void> {
+    this.logger.info('🚀 初始化CppConfig配置...');
+    
+    const config = await this.getCppConfig(true); // 强制刷新
+    if (config) {
+      await this.applyCppConfigToLocalSettings(config);
+      this.logger.info('🎯 CppConfig初始化完成');
+    } else {
+      this.logger.warn('⚠️ CppConfig初始化失败，使用默认配置');
+    }
+  }
+
+  /**
+   * 🎯 记录补全结果（用户接受/拒绝的反馈）
+   */
+  async recordCppFate(requestId: string, fate: CppFate, performanceTime?: number): Promise<RecordCppFateResponse | null> {
+    try {
+      this.logger.info(`📊 记录补全结果: ${requestId} -> ${CppFate[fate]}`);
+      
+      const request = new RecordCppFateRequest({
+        requestId,
+        fate,
+        performanceNowTime: performanceTime || performance.now(),
+        extension: 'vscode' // 标识来源是 VSCode 扩展
+      });
+      
+      const checksum = getOrGenerateClientKey();
+      
+      const response = await this.cppClient.recordCppFate(request, {
+        headers: {
+          "authorization": `Bearer ${this.options.authToken}`,
+          "x-cursor-client-version": "1.6.1-connectrpc",
+          "x-cursor-checksum": checksum,
+          "User-Agent": "connectrpc/1.6.1"
+        }
+      });
+      
+      this.logger.info('✅ 补全结果记录成功');
+      return response;
+      
+    } catch (error) {
+      this.logger.error('❌ 记录补全结果失败', error as Error);
+      return null;
+    }
+  }
+
+  /**
+   * 获取当前缓存的配置
+   */
+  getCachedCppConfig(): CppConfigResponse | null {
+    return this.cachedCppConfig;
+  }
+
+  /**
+   * 清除配置缓存
+   */
+  clearConfigCache(): void {
+    this.cachedCppConfig = null;
+    this.configLastFetched = 0;
+    this.logger.debug('🗑️ 已清除CppConfig缓存');
   }
 }

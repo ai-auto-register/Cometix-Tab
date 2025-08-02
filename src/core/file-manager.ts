@@ -4,6 +4,7 @@ import type { FileInfo, CompletionRequest } from '../types';
 import { CryptoUtils } from '../utils/crypto';
 import { Logger } from '../utils/logger';
 import { CursorApiClient } from './api-client';
+import { smartEditDetector } from '../utils/smart-edit-detector';
 
 export class FileManager {
   private logger: Logger;
@@ -11,6 +12,9 @@ export class FileManager {
   private syncedFiles = new Map<string, FileInfo>();
   private debounceTimers = new Map<string, NodeJS.Timeout>();
   private debounceMs: number;
+  // 🚀 性能优化：添加上下文缓存
+  private contextCache = new Map<string, { files: FileInfo[]; timestamp: number }>();
+  private readonly CONTEXT_CACHE_TTL = 5000; // 5秒缓存
   
   constructor(apiClient: CursorApiClient, debounceMs: number = 300) {
     this.logger = Logger.getInstance();
@@ -44,6 +48,37 @@ export class FileManager {
       return;
     }
     
+    // 🔧 使用智能编辑检测器获取同步建议
+    const syncCheck = smartEditDetector.shouldSyncFile(document);
+    
+    this.logger.debug(`🧠 智能同步检查: ${syncCheck.reason}`);
+    
+    if (!syncCheck.shouldSync) {
+      this.logger.debug('🚫 智能检测器建议跳过同步');
+      return;
+    }
+    
+    // 根据编辑状态动态调整防抖时间
+    const operation = smartEditDetector.getCurrentOperation(document);
+    let dynamicDebounceMs = this.debounceMs;
+    
+    switch (operation) {
+      case 'DELETING':
+        dynamicDebounceMs = Math.max(this.debounceMs * 2, 800); // 删除时延长防抖
+        break;
+      case 'TYPING':
+        dynamicDebounceMs = Math.max(this.debounceMs * 1.5, 600); // 输入时适当延长
+        break;
+      case 'UNDOING':
+      case 'PASTING':
+        dynamicDebounceMs = Math.min(this.debounceMs * 0.5, 200); // 撤销和粘贴后快速同步
+        break;
+      default:
+        dynamicDebounceMs = this.debounceMs;
+    }
+    
+    this.logger.debug(`🕒 动态防抖时间: ${dynamicDebounceMs}ms (编辑状态: ${operation})`);
+    
     // 防抖处理
     const existingTimer = this.debounceTimers.get(filePath);
     if (existingTimer) {
@@ -52,13 +87,13 @@ export class FileManager {
     
     const timer = setTimeout(async () => {
       this.debounceTimers.delete(filePath);
-      await this.performSync(fileInfo);
-    }, this.debounceMs);
+      await this.performSync(fileInfo, syncCheck.useIncrementalSync);
+    }, dynamicDebounceMs);
     
     this.debounceTimers.set(filePath, timer);
   }
   
-  private async performSync(fileInfo: FileInfo): Promise<void> {
+  private async performSync(fileInfo: FileInfo, preferIncrementalSync: boolean = true): Promise<void> {
     try {
       const existing = this.syncedFiles.get(fileInfo.path);
       let success = false;
@@ -75,12 +110,25 @@ export class FileManager {
         }
       } else {
         try {
-          // 增量同步
-          fileInfo.modelVersion = existing.modelVersion;
-          success = await this.apiClient.syncFile(fileInfo);
+          // 根据智能检测器建议选择同步策略
+          if (preferIncrementalSync) {
+            this.logger.debug('🔧 使用智能建议的增量同步');
+            fileInfo.modelVersion = existing.modelVersion;
+            success = await this.apiClient.syncFile(fileInfo);
+          } else {
+            this.logger.debug('🔧 使用智能建议的完整上传');
+            success = await this.apiClient.uploadFile(fileInfo);
+          }
         } catch (syncError) {
-          this.logger.warn(`⚠️ 文件同步失败，将使用纯内容模式: ${syncError}`);
-          success = false; // 标记失败，后续使用纯内容模式
+          this.logger.warn(`⚠️ 智能同步失败，回退到默认策略: ${syncError}`);
+          // 回退到增量同步
+          try {
+            fileInfo.modelVersion = existing.modelVersion;
+            success = await this.apiClient.syncFile(fileInfo);
+          } catch (fallbackError) {
+            this.logger.warn(`⚠️ 回退同步也失败，将使用纯内容模式: ${fallbackError}`);
+            success = false;
+          }
         }
       }
       
@@ -154,10 +202,19 @@ export class FileManager {
    */
   async getMultiFileContext(currentDocument: vscode.TextDocument, maxFiles: number = 10): Promise<FileInfo[]> {
     try {
+      const currentPath = vscode.workspace.asRelativePath(currentDocument.uri);
+      
+      // 🚀 性能优化：检查缓存
+      const cacheKey = `${currentPath}:${maxFiles}`;
+      const cached = this.contextCache.get(cacheKey);
+      if (cached && (Date.now() - cached.timestamp) < this.CONTEXT_CACHE_TTL) {
+        this.logger.info(`⚡ 使用缓存的多文件上下文: ${cached.files.length} 个文件`);
+        return cached.files;
+      }
+      
       this.logger.info(`🔍 获取多文件上下文，当前文件: ${currentDocument.fileName}`);
       
       const contextFiles: FileInfo[] = [];
-      const currentPath = vscode.workspace.asRelativePath(currentDocument.uri);
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(currentDocument.uri);
       
       if (!workspaceFolder) {
@@ -168,18 +225,26 @@ export class FileManager {
       // 1. 添加当前文件
       contextFiles.push(await this.getCurrentFileInfo(currentDocument));
 
-      // 2. 获取同目录下的相关文件
-      const currentDir = path.dirname(currentDocument.uri.fsPath);
-      const sameDirectoryFiles = await this.findRelevantFilesInDirectory(currentDir, currentPath, 3);
-      contextFiles.push(...sameDirectoryFiles);
+      // 🚀 基于 LSP 的智能上下文收集策略
+      // 2. 使用 LSP 获取相关文件（最准确的方法）
+      const lspRelatedFiles = await this.findLSPRelatedFiles(currentDocument, maxFiles - 1);
+      contextFiles.push(...lspRelatedFiles);
 
-      // 3. 获取项目根目录的配置文件
-      const configFiles = await this.findConfigFiles(workspaceFolder.uri.fsPath, currentPath);
-      contextFiles.push(...configFiles);
+      // 3. 回退策略：如果 LSP 没有返回足够的文件，使用基础方法补充
+      if (contextFiles.length < maxFiles) {
+        const remainingSlots = maxFiles - contextFiles.length;
+        
+        // 获取同目录下的相关文件
+        const currentDir = path.dirname(currentDocument.uri.fsPath);
+        const sameDirectoryFiles = await this.findRelevantFilesInDirectory(currentDir, currentPath, Math.min(3, remainingSlots));
+        contextFiles.push(...sameDirectoryFiles);
 
-      // 4. 根据当前文件的导入语句找相关文件
-      const importedFiles = await this.findImportedFiles(currentDocument, workspaceFolder);
-      contextFiles.push(...importedFiles);
+        // 获取重要的配置文件
+        if (contextFiles.length < maxFiles) {
+          const configFiles = await this.findConfigFiles(workspaceFolder.uri.fsPath, currentPath);
+          contextFiles.push(...configFiles.slice(0, maxFiles - contextFiles.length));
+        }
+      }
 
       // 5. 去重并限制数量
       const uniqueFiles = this.deduplicateFiles(contextFiles);
@@ -188,6 +253,12 @@ export class FileManager {
       this.logger.info(`✅ 收集到 ${limitedFiles.length} 个上下文文件:`);
       limitedFiles.forEach(file => {
         this.logger.info(`   📄 ${file.path} (${file.content.length} 字符)`);
+      });
+
+      // 🚀 性能优化：缓存结果
+      this.contextCache.set(cacheKey, {
+        files: limitedFiles,
+        timestamp: Date.now()
       });
 
       return limitedFiles;
@@ -262,95 +333,135 @@ export class FileManager {
   }
 
   /**
-   * 根据导入语句查找相关文件
+   * 使用 LSP 获取相关文件（最准确的方法）
    */
-  private async findImportedFiles(document: vscode.TextDocument, workspaceFolder: vscode.WorkspaceFolder): Promise<FileInfo[]> {
+  private async findLSPRelatedFiles(document: vscode.TextDocument, maxFiles: number): Promise<FileInfo[]> {
     try {
-      const content = document.getText();
-      const imports = this.extractImportPaths(content);
       const files: FileInfo[] = [];
+      const currentUri = document.uri;
+      
+      this.logger.info(`🔍 使用 LSP 查找相关文件，最大数量: ${maxFiles}`);
 
-      for (const importPath of imports) {
-        if (files.length >= 5) break; // 限制导入文件数量
+      // 1. 获取当前文件的所有引用
+      const references = await this.getLSPReferences(currentUri);
+      
+      // 2. 获取当前文件导入的文件
+      const imports = await this.getLSPImports(currentUri);
+      
+      // 3. 合并并去重
+      const allRelatedUris = [...new Set([...references, ...imports])];
+      
+      this.logger.info(`📊 LSP 发现 ${allRelatedUris.length} 个相关文件`);
+
+      // 4. 转换为 FileInfo 并限制数量
+      for (const uri of allRelatedUris.slice(0, maxFiles)) {
+        if (uri.toString() === currentUri.toString()) continue; // 跳过当前文件
         
-        const resolvedPath = await this.resolveImportPath(importPath, document.uri, workspaceFolder);
-        if (resolvedPath) {
-          const relativePath = vscode.workspace.asRelativePath(resolvedPath);
-          const fileInfo = await this.readFileAsFileInfo(resolvedPath, relativePath);
-          if (fileInfo) {
-            files.push(fileInfo);
-          }
+        const relativePath = vscode.workspace.asRelativePath(uri);
+        const fileInfo = await this.readFileAsFileInfo(uri.fsPath, relativePath);
+        if (fileInfo) {
+          files.push(fileInfo);
+          this.logger.debug(`🔗 LSP 添加相关文件: ${relativePath}`);
         }
       }
 
+      this.logger.info(`✅ LSP 成功收集 ${files.length} 个相关文件`);
       return files;
     } catch (error) {
-      this.logger.debug('解析导入文件失败', error as Error);
+      this.logger.debug('LSP 获取相关文件失败，使用回退策略', error as Error);
       return [];
     }
   }
 
   /**
-   * 提取文件中的导入路径
+   * 获取 LSP 引用信息
    */
-  private extractImportPaths(content: string): string[] {
-    const imports: string[] = [];
-    
-    // TypeScript/JavaScript import 语句
-    const importRegex = /import.*?from\s+['"]([^'"]+)['"]/g;
-    const requireRegex = /require\s*\(\s*['"]([^'"]+)['"]\s*\)/g;
-    
-    let match;
-    while ((match = importRegex.exec(content)) !== null) {
-      if (!match[1].startsWith('.')) continue; // 只处理相对导入
-      imports.push(match[1]);
-    }
-    
-    while ((match = requireRegex.exec(content)) !== null) {
-      if (!match[1].startsWith('.')) continue; // 只处理相对导入
-      imports.push(match[1]);
-    }
-
-    return imports;
-  }
-
-  /**
-   * 解析导入路径为实际文件路径
-   */
-  private async resolveImportPath(importPath: string, currentFileUri: vscode.Uri, workspaceFolder: vscode.WorkspaceFolder): Promise<string | null> {
+  private async getLSPReferences(uri: vscode.Uri): Promise<vscode.Uri[]> {
     try {
-      const currentDir = path.dirname(currentFileUri.fsPath);
-      const possibleExtensions = ['.ts', '.tsx', '.js', '.jsx', '.vue', '.svelte'];
-      
-      // 如果导入路径已有扩展名
-      if (path.extname(importPath)) {
-        const fullPath = path.resolve(currentDir, importPath);
-        if (await this.fileExists(fullPath)) {
-          return fullPath;
-        }
-      } else {
-        // 尝试不同扩展名
-        for (const ext of possibleExtensions) {
-          const fullPath = path.resolve(currentDir, importPath + ext);
-          if (await this.fileExists(fullPath)) {
-            return fullPath;
-          }
-        }
+      // 获取文件中的所有符号
+      const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+        'vscode.executeDocumentSymbolProvider', uri
+      );
+
+      const referencedFiles: vscode.Uri[] = [];
+
+      if (symbols && symbols.length > 0) {
+        // 对主要符号查找引用
+        const mainSymbols = symbols.slice(0, 3); // 限制查找的符号数量
         
-        // 尝试 index 文件
-        for (const ext of possibleExtensions) {
-          const indexPath = path.resolve(currentDir, importPath, 'index' + ext);
-          if (await this.fileExists(indexPath)) {
-            return indexPath;
+        for (const symbol of mainSymbols) {
+          try {
+            const references = await vscode.commands.executeCommand<vscode.Location[]>(
+              'vscode.executeReferenceProvider', 
+              uri, 
+              symbol.range.start
+            );
+
+            if (references) {
+              references.forEach(ref => {
+                if (ref.uri.toString() !== uri.toString()) {
+                  referencedFiles.push(ref.uri);
+                }
+              });
+            }
+          } catch (error) {
+            // 忽略单个符号的错误
           }
         }
       }
-      
-      return null;
+
+      return [...new Set(referencedFiles.map(u => u.toString()))].map(s => vscode.Uri.parse(s));
     } catch (error) {
-      return null;
+      this.logger.debug('获取 LSP 引用失败', error as Error);
+      return [];
     }
   }
+
+  /**
+   * 获取 LSP 导入信息
+   */
+  private async getLSPImports(uri: vscode.Uri): Promise<vscode.Uri[]> {
+    try {
+      // 使用 Go to Definition 获取导入的文件
+      const document = await vscode.workspace.openTextDocument(uri);
+      const content = document.getText();
+      const imports: vscode.Uri[] = [];
+
+      // 查找 import 语句并获取定义位置
+      const importRegex = /import.*?from\s+['"]([^'"]+)['"]/g;
+      let match;
+
+      while ((match = importRegex.exec(content)) !== null && imports.length < 5) {
+        const importPath = match[1];
+        if (importPath.startsWith('.')) { // 只处理相对导入
+          try {
+            const line = document.positionAt(match.index).line;
+            const definitions = await vscode.commands.executeCommand<vscode.Location[]>(
+              'vscode.executeDefinitionProvider',
+              uri,
+              new vscode.Position(line, match.index + match[0].indexOf(importPath))
+            );
+
+            if (definitions && definitions.length > 0) {
+              definitions.forEach(def => {
+                if (def.uri.toString() !== uri.toString()) {
+                  imports.push(def.uri);
+                }
+              });
+            }
+          } catch (error) {
+            // 忽略单个导入的错误
+          }
+        }
+      }
+
+      return [...new Set(imports.map(u => u.toString()))].map(s => vscode.Uri.parse(s));
+    } catch (error) {
+      this.logger.debug('获取 LSP 导入失败', error as Error);
+      return [];
+    }
+  }
+
 
   /**
    * 检查文件是否存在
