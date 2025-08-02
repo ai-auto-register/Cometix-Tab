@@ -70,7 +70,7 @@ export class ApiClient {
   private getHeaders(contentType = 'application/json'): HeadersInit {
     const headers: Record<string, string> = {
       'Content-Type': contentType,
-      'User-Agent': 'VSCode-Cometix-Tab/0.0.1'
+      'User-Agent': 'connectrpc/1.6.1'
     };
 
     if (this.config.authToken) {

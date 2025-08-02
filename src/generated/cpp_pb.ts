@@ -7,8 +7,8 @@ import type { BinaryReadOptions, FieldList, JsonReadOptions, JsonValue, PartialM
 import { Message, proto3, protoInt64, Timestamp } from "@bufbuild/protobuf";
 
 /**
- * @version: 1.3.3~1.3.4
- * @author: wisdgod nav@wisdgod.com
+ * @version: 1.3.6~1.3.7
+ * @author: wisdgod <nav@wisdgod.com>
  * @license: MIT OR Apache-2.0
  *
  * aiserver.v1.EmbeddingModel
@@ -18880,6 +18880,11 @@ export enum ComposerCapabilityRequest_ComposerCapabilityType {
    * @generated from enum value: COMPOSER_CAPABILITY_TYPE_CONTEXT_WINDOW = 31;
    */
   CONTEXT_WINDOW = 31,
+
+  /**
+   * @generated from enum value: COMPOSER_CAPABILITY_TYPE_ONLINE_METRICS = 32;
+   */
+  ONLINE_METRICS = 32,
 }
 // Retrieve enum metadata with: proto3.getEnumType(ComposerCapabilityRequest_ComposerCapabilityType)
 proto3.util.setEnumType(ComposerCapabilityRequest_ComposerCapabilityType, "aiserver.v1.ComposerCapabilityRequest.ComposerCapabilityType", [
@@ -18915,6 +18920,7 @@ proto3.util.setEnumType(ComposerCapabilityRequest_ComposerCapabilityType, "aiser
   { no: 29, name: "COMPOSER_CAPABILITY_TYPE_SUB_COMPOSER" },
   { no: 30, name: "COMPOSER_CAPABILITY_TYPE_THINKING" },
   { no: 31, name: "COMPOSER_CAPABILITY_TYPE_CONTEXT_WINDOW" },
+  { no: 32, name: "COMPOSER_CAPABILITY_TYPE_ONLINE_METRICS" },
 ]);
 
 /**
@@ -20925,6 +20931,11 @@ export class ConversationMessage extends Message<ConversationMessage> {
   isReviewEditsFollowup?: boolean;
 
   /**
+   * @generated from field: string request_id = 74;
+   */
+  requestId = "";
+
+  /**
    * @generated from field: optional aiserver.v1.ConversationMessage.IdeEditorsState ide_editors_state = 73;
    */
   ideEditorsState?: ConversationMessage_IdeEditorsState;
@@ -21009,6 +21020,7 @@ export class ConversationMessage extends Message<ConversationMessage> {
     { no: 70, name: "git_status_raw", kind: "scalar", T: 9 /* ScalarType.STRING */, opt: true },
     { no: 71, name: "todos", kind: "message", T: TodoItem, repeated: true },
     { no: 72, name: "is_review_edits_followup", kind: "scalar", T: 8 /* ScalarType.BOOL */, opt: true },
+    { no: 74, name: "request_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
     { no: 73, name: "ide_editors_state", kind: "message", T: ConversationMessage_IdeEditorsState, opt: true },
   ]);
 

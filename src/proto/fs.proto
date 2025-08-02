@@ -2,9 +2,10 @@ syntax = "proto3";
 package aiserver.v1;
 import "google/protobuf/timestamp.proto";
 import "cpp.proto";
-// @version: 1.3.3~1.3.4
-// @author: wisdgod nav@wisdgod.com
+// @version: 1.3.6~1.3.7
+// @author: wisdgod <nav@wisdgod.com>
 // @license: MIT OR Apache-2.0
+// SimpleRange is defined in cpp.proto
 enum FSUploadErrorType { // aiserver.v1.FSUploadErrorType
 	FS_UPLOAD_ERROR_TYPE_UNSPECIFIED = 0;
 	FS_UPLOAD_ERROR_TYPE_NON_EXISTANT = 1;
@@ -25,7 +26,7 @@ message FSUploadFileRequest { // aiserver.v1.FSUploadFileRequest
 message FSUploadFileResponse { // aiserver.v1.FSUploadFileResponse
 	FSUploadErrorType error = 1;
 }
-// FilesyncUpdateWithModelVersion and SingleUpdateRequest are imported from cpp.proto
+// FilesyncUpdateWithModelVersion and SingleUpdateRequest are defined in cpp.proto
 message FSSyncFileRequest { // aiserver.v1.FSSyncFileRequest
 	string uuid = 1;
 	string relative_workspace_path = 2;

@@ -8,9 +8,10 @@ import { Message, proto3, Timestamp } from "@bufbuild/protobuf";
 import { FilesyncUpdateWithModelVersion } from "./cpp_pb.js";
 
 /**
- * @version: 1.3.3~1.3.4
- * @author: wisdgod nav@wisdgod.com
+ * @version: 1.3.6~1.3.7
+ * @author: wisdgod <nav@wisdgod.com>
  * @license: MIT OR Apache-2.0
+ * SimpleRange is defined in cpp.proto
  *
  * aiserver.v1.FSUploadErrorType
  *
@@ -170,7 +171,7 @@ export class FSUploadFileResponse extends Message<FSUploadFileResponse> {
 }
 
 /**
- * FilesyncUpdateWithModelVersion and SingleUpdateRequest are imported from cpp.proto
+ * FilesyncUpdateWithModelVersion and SingleUpdateRequest are defined in cpp.proto
  *
  * aiserver.v1.FSSyncFileRequest
  *
