@@ -73,7 +73,8 @@ export async function debugCompletionCommand(): Promise<void> {
         
         if (response.text) {
           totalText += response.text;
-          logger.info(`📝 接收到文本 (${responseCount}): "${response.text.substring(0, 50)}..."`);
+          logger.info(`📝 接收到文本 (${responseCount}):`);
+          logger.info(response.text);
         }
         
         if (response.doneStream) {
@@ -93,7 +94,8 @@ export async function debugCompletionCommand(): Promise<void> {
         const result = `✅ 补全成功！
 📊 响应数量: ${responseCount}
 📝 补全内容长度: ${totalText.length} 字符
-📄 补全预览: ${totalText.substring(0, 200)}${totalText.length > 200 ? '...' : ''}`;
+📄 完整补全内容:
+${totalText}`;
         
         logger.info(result);
         vscode.window.showInformationMessage('✅ 调试完成，请查看输出面板');

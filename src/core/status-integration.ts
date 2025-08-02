@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ConfigManager } from '../utils/config';
 import { Logger } from '../utils/logger';
-import { EnhancedStatusBar, StatusBarState } from '../ui/enhanced-status-bar';
+import { StatusBar, StatusBarState } from '../ui/status-bar';
 
 interface CompletionStats {
   today: number;
@@ -20,7 +20,7 @@ interface SystemStatus {
 export class StatusIntegration {
   private static instance: StatusIntegration;
   private logger = Logger.getInstance();
-  private statusBar?: EnhancedStatusBar;
+  private statusBar?: StatusBar;
   private stats: CompletionStats;
   private systemStatus: SystemStatus;
   private checkTimer?: NodeJS.Timeout;
@@ -51,7 +51,7 @@ export class StatusIntegration {
   /**
    * 设置状态栏引用
    */
-  public setStatusBar(statusBar: EnhancedStatusBar): void {
+  public setStatusBar(statusBar: StatusBar): void {
     this.statusBar = statusBar;
     this.logger.debug('StatusBar reference set');
   }

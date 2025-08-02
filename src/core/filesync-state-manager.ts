@@ -13,6 +13,7 @@ export interface FileSyncState {
   sha256Hash: string;
   uploadTime: number;
   successful: boolean;
+  lastContent?: string; // 🔧 添加最后同步的内容，用于计算差异
 }
 
 /**
@@ -41,10 +42,11 @@ export class FileSyncStateManager {
       path: fileInfo.path,
       workspaceId,
       uuid,
-      modelVersion: fileInfo.modelVersion || 0, // 使用请求中的版本号
+      modelVersion: fileInfo.modelVersion || 0, // 使用上传时的版本号
       sha256Hash: fileInfo.sha256 || '',
       uploadTime: Date.now(),
-      successful: response.error === FSUploadErrorType.FS_UPLOAD_ERROR_TYPE_UNSPECIFIED // 无错误表示成功
+      successful: response.error === FSUploadErrorType.FS_UPLOAD_ERROR_TYPE_UNSPECIFIED, // 无错误表示成功
+      lastContent: fileInfo.content // 🔧 保存文件内容以便后续计算差异
     };
 
     this.syncStates.set(fileInfo.path, state);
@@ -63,6 +65,22 @@ export class FileSyncStateManager {
    */
   getFileSyncState(filePath: string): FileSyncState | undefined {
     return this.syncStates.get(filePath);
+  }
+
+  /**
+   * 获取文件最后同步的内容，用于计算增量差异
+   */
+  getLastSyncedContent(filePath: string): string | null {
+    const state = this.syncStates.get(filePath);
+    return state?.lastContent || null;
+  }
+
+  /**
+   * 检查文件是否可以进行增量同步
+   */
+  canPerformIncrementalSync(filePath: string): boolean {
+    const state = this.syncStates.get(filePath);
+    return !!(state?.successful && state?.lastContent);
   }
 
   /**
