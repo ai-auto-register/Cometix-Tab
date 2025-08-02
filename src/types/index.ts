@@ -1,4 +1,11 @@
 // 基础类型定义
+export interface TriggerConfig {
+  commaTriggersCompletion: boolean;
+  newLineHighConfidence: boolean;
+  lineEndHighConfidence: boolean;
+  customTriggerChars: string[];
+}
+
 export interface CursorConfig {
   enabled: boolean;
   serverUrl: string;
@@ -9,6 +16,8 @@ export interface CursorConfig {
   snoozeUntil: number;
   maxCompletionLength: number;
   debounceMs: number;
+  logLevel: 'debug' | 'info' | 'warn' | 'error';
+  triggerConfig: TriggerConfig;
 }
 
 export interface FileInfo {
@@ -41,6 +50,7 @@ export interface CompletionResponse {
     line: number;
     column: number;
   };
+  bindingId?: string; // 🎯 用于跟踪补全结果反馈
 }
 
 export type SSEEventType = 

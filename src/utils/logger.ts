@@ -10,10 +10,20 @@ export enum LogLevel {
 export class Logger {
   private static instance: Logger;
   private outputChannel: vscode.OutputChannel;
-  private logLevel: LogLevel = LogLevel.INFO;
+  private logLevel: LogLevel = LogLevel.INFO;  // 默认为 INFO 级别
   
   private constructor() {
     this.outputChannel = vscode.window.createOutputChannel('Cometix Tab');
+    
+    // 初始化时读取配置
+    this.updateLogLevelFromConfig();
+    
+    // 监听配置变化
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('cometixTab.logLevel')) {
+        this.updateLogLevelFromConfig();
+      }
+    });
   }
   
   static getInstance(): Logger {
@@ -25,6 +35,51 @@ export class Logger {
   
   setLogLevel(level: LogLevel): void {
     this.logLevel = level;
+  }
+
+  /**
+   * 从 VSCode 配置中更新日志级别
+   */
+  private updateLogLevelFromConfig(): void {
+    const config = vscode.workspace.getConfiguration('cometixTab');
+    const logLevelString = config.get<string>('logLevel', 'info');
+    
+    const levelMap: Record<string, LogLevel> = {
+      'debug': LogLevel.DEBUG,
+      'info': LogLevel.INFO,
+      'warn': LogLevel.WARN,
+      'error': LogLevel.ERROR
+    };
+    
+    const newLevel = levelMap[logLevelString] ?? LogLevel.INFO;
+    
+    if (this.logLevel !== newLevel) {
+      const oldLevelName = Object.keys(levelMap).find(key => levelMap[key] === this.logLevel) || 'unknown';
+      const newLevelName = Object.keys(levelMap).find(key => levelMap[key] === newLevel) || 'unknown';
+      
+      this.logLevel = newLevel;
+      this.log('INFO', `🔧 日志级别已更新: ${oldLevelName} → ${newLevelName}`);
+    }
+  }
+
+  /**
+   * 获取当前日志级别
+   */
+  getCurrentLogLevel(): LogLevel {
+    return this.logLevel;
+  }
+
+  /**
+   * 获取当前日志级别名称
+   */
+  getCurrentLogLevelName(): string {
+    const levelMap: Record<LogLevel, string> = {
+      [LogLevel.DEBUG]: 'debug',
+      [LogLevel.INFO]: 'info',
+      [LogLevel.WARN]: 'warn',
+      [LogLevel.ERROR]: 'error'
+    };
+    return levelMap[this.logLevel] || 'unknown';
   }
   
   debug(message: string, ...args: any[]): void {

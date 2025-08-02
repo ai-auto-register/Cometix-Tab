@@ -160,71 +160,247 @@ export class SmartCompletionDiffer {
   }
   
   /**
-   * 行级差异提取
+   * 行级差异提取 - 修复版本
    */
   private extractUsingLineDiff(
     context: CompletionContext, 
     apiResponse: string, 
     config: DiffOptions
   ): DiffExtractionResult {
-    this.logger.debug('📄 使用行级diff算法');
+    this.logger.debug('📄 使用修复的行级diff算法');
     
-    // 🔧 CRITICAL FIX: API响应通常包含完整的代码块，需要智能去重
-    // 不是简单的插入，而是需要找出真正新增的内容
+    // 🔧 CRITICAL FIX: 完全重写行级diff逻辑
+    // 问题：之前的算法只是简单去重，导致语法错误
+    // 解决：使用更智能的方法，确保返回完整、有效的代码片段
     
-    const currentLines = context.beforeCursor.split('\n');
-    const apiLines = apiResponse.split('\n');
+    this.logger.debug(`📊 API响应长度: ${apiResponse.length} 字符`);
+    this.logger.debug(`📋 上下文信息: beforeCursor=${context.beforeCursor.length}, afterCursor=${context.afterCursor.length}`);
     
-    this.logger.debug(`📊 当前代码行数: ${currentLines.length}, API响应行数: ${apiLines.length}`);
-    
-    // 找出API响应中不在当前代码中的新行
-    const newLines: string[] = [];
-    const existingLinesSet = new Set(currentLines.map(line => line.trim()));
-    
-    for (const apiLine of apiLines) {
-      const trimmedApiLine = apiLine.trim();
+    // 🔧 策略1: 如果API响应很短且看起来是完整的，直接使用
+    if (apiResponse.length < 200 && this.looksLikeCompleteCode(apiResponse)) {
+      this.logger.debug('✅ 使用策略1: 短响应直接使用');
       
-      // 跳过空行和已存在的行
-      if (trimmedApiLine === '' || existingLinesSet.has(trimmedApiLine)) {
-        this.logger.debug(`⏭️ 跳过重复/空行: "${trimmedApiLine}"`);
-        continue;
-      }
+      const optimizedText = this.applySyntaxAwareOptimizations(apiResponse, context);
       
-      newLines.push(apiLine);
-      this.logger.debug(`➕ 发现新行: "${apiLine.substring(0, 50)}${apiLine.length > 50 ? '...' : ''}"`);
-    }
-    
-    if (newLines.length === 0) {
-      this.logger.debug('⚠️ 没有找到新的代码行');
       return {
-        insertText: '',
-        confidence: 0.1,
+        insertText: optimizedText,
+        confidence: 0.8,
         method: DiffMethod.LINE_DIFF,
-        optimizations: ['去重后无新内容'],
+        optimizations: ['策略1: 短响应直接使用'],
         processingTimeMs: 0
       };
     }
     
-    const insertText = newLines.join('\n');
+    // 🔧 策略2: 基于光标位置的智能提取
+    const contextAnalysisResult = this.analyzeCompletionContext(context, apiResponse);
+    if (contextAnalysisResult.confidence > 0.6) {
+      this.logger.debug('✅ 使用策略2: 基于上下文分析');
+      
+      return {
+        insertText: contextAnalysisResult.extractedText,
+        confidence: contextAnalysisResult.confidence,
+        method: DiffMethod.LINE_DIFF,
+        optimizations: [`策略2: 上下文分析，置信度${contextAnalysisResult.confidence.toFixed(3)}`],
+        processingTimeMs: 0
+      };
+    }
     
-    // 应用语法感知优化
-    const optimizedText = this.applySyntaxAwareOptimizations(insertText, context);
-    const optimizations = this.getOptimizationLog(insertText, optimizedText);
-    optimizations.unshift(`去重: ${apiLines.length} → ${newLines.length} 行`);
-    
-    // 计算置信度 - 去重效果越好，置信度越高
-    const duplicateRatio = (apiLines.length - newLines.length) / apiLines.length;
-    const baseConfidence = 0.6 + (duplicateRatio * 0.3); // 0.6-0.9范围
-    
-    this.logger.debug(`🎯 去重效果: ${(duplicateRatio * 100).toFixed(1)}%, 置信度: ${baseConfidence.toFixed(3)}`);
+    // 🔧 策略3: 保守回退 - 使用前缀匹配
+    this.logger.debug('⚠️ 使用策略3: 保守回退');
+    const prefixResult = this.extractByPrefixMatching(context, apiResponse);
     
     return {
-      insertText: optimizedText,
-      confidence: baseConfidence,
+      insertText: prefixResult.text,
+      confidence: 0.4,
       method: DiffMethod.LINE_DIFF,
-      optimizations,
+      optimizations: ['策略3: 前缀匹配回退'],
       processingTimeMs: 0
     };
+  }
+  
+  /**
+   * 检查是否看起来是完整的代码
+   */
+  private looksLikeCompleteCode(text: string): boolean {
+    const trimmed = text.trim();
+    
+    // 空内容不算完整
+    if (!trimmed) return false;
+    
+    // 检查是否有明显的语法错误标识
+    const problematicPatterns = [
+      /^[},;]+$/,           // 只有结束符号
+      /^[{,;]\s*$/,         // 只有开始符号  
+      /^\s*[,;]\s*$/,       // 只有分隔符
+      /^[}\])\s]*,\s*$/     // 只有闭合符号加逗号
+    ];
+    
+    if (problematicPatterns.some(pattern => pattern.test(trimmed))) {
+      this.logger.debug(`⚠️ 检测到问题模式: "${trimmed}"`);
+      return false;
+    }
+    
+    // 检查是否有基本的代码结构
+    const hasCodeStructure = /[a-zA-Z_$][a-zA-Z0-9_$]*\s*[:=]/.test(trimmed) || // 属性赋值
+                             /[a-zA-Z_$][a-zA-Z0-9_$]*\s*\(/.test(trimmed) ||   // 函数调用
+                             /^[a-zA-Z_$]/.test(trimmed);                        // 以标识符开始
+    
+    this.logger.debug(`🔍 代码结构检查: ${hasCodeStructure ? '通过' : '失败'} - "${trimmed.substring(0, 30)}..."`);
+    return hasCodeStructure;
+  }
+  
+  /**
+   * 分析补全上下文，智能提取相关内容
+   */
+  private analyzeCompletionContext(context: CompletionContext, apiResponse: string): {
+    extractedText: string;
+    confidence: number;
+  } {
+    // 分析光标前的最后一个token，了解用户期望
+    const beforeCursor = context.beforeCursor.trim();
+    const lastToken = this.getLastToken(beforeCursor);
+    
+    this.logger.debug(`🔍 上下文分析: 最后token="${lastToken}"`);
+    
+    // 根据最后的token类型决定提取策略
+    if (lastToken.endsWith(':')) {
+      // 期望属性值
+      return this.extractPropertyValue(apiResponse, context);
+    } else if (lastToken.endsWith(',')) {
+      // 期望下一个元素
+      return this.extractNextElement(apiResponse, context);
+    } else if (lastToken.endsWith('{')) {
+      // 期望对象内容
+      return this.extractObjectContent(apiResponse, context);
+    } else {
+      // 一般情况，寻找最相关的片段
+      return this.extractRelevantSegment(apiResponse, context);
+    }
+  }
+  
+  /**
+   * 获取最后一个有意义的token
+   */
+  private getLastToken(text: string): string {
+    const matches = text.match(/[a-zA-Z0-9_$]+[:\s]*$|[{}(),;:]\s*$/);
+    return matches ? matches[0].trim() : '';
+  }
+  
+  /**
+   * 提取属性值（当前上下文以:结尾）
+   */
+  private extractPropertyValue(apiResponse: string, context: CompletionContext): {
+    extractedText: string;
+    confidence: number;
+  } {
+    // 寻找第一个完整的值表达式
+    const lines = apiResponse.split('\n');
+    const firstLine = lines[0]?.trim();
+    
+    if (firstLine && !firstLine.startsWith('}') && !firstLine.startsWith(',')) {
+      return {
+        extractedText: firstLine,
+        confidence: 0.8
+      };
+    }
+    
+    return {
+      extractedText: apiResponse.trim(),
+      confidence: 0.5
+    };
+  }
+  
+  /**
+   * 提取下一个元素（当前上下文以,结尾）
+   */
+  private extractNextElement(apiResponse: string, context: CompletionContext): {
+    extractedText: string;
+    confidence: number;
+  } {
+    // 去掉API响应开头的逗号（如果有）
+    let cleanResponse = apiResponse.replace(/^\s*,\s*/, '').trim();
+    
+    if (cleanResponse && this.looksLikeCompleteCode(cleanResponse)) {
+      return {
+        extractedText: cleanResponse,
+        confidence: 0.7
+      };
+    }
+    
+    return {
+      extractedText: apiResponse.trim(),
+      confidence: 0.4
+    };
+  }
+  
+  /**
+   * 提取对象内容（当前上下文以{结尾）
+   */
+  private extractObjectContent(apiResponse: string, context: CompletionContext): {
+    extractedText: string;
+    confidence: number;
+  } {
+    // 寻找对象属性和值
+    const lines = apiResponse.split('\n').filter(line => line.trim());
+    
+    if (lines.length > 0) {
+      const firstLine = lines[0].trim();
+      if (firstLine.includes(':') || firstLine.match(/^[a-zA-Z_$]/)) {
+        return {
+          extractedText: lines.join('\n'),
+          confidence: 0.7
+        };
+      }
+    }
+    
+    return {
+      extractedText: apiResponse.trim(),
+      confidence: 0.5
+    };
+  }
+  
+  /**
+   * 提取最相关的片段
+   */
+  private extractRelevantSegment(apiResponse: string, context: CompletionContext): {
+    extractedText: string;
+    confidence: number;
+  } {
+    // 简单启发式：去掉明显的重复内容
+    const lines = apiResponse.split('\n');
+    const beforeLines = context.beforeCursor.split('\n');
+    const beforeSet = new Set(beforeLines.map(line => line.trim()));
+    
+    const relevantLines = lines.filter(line => {
+      const trimmed = line.trim();
+      return trimmed && !beforeSet.has(trimmed) && this.looksLikeCompleteCode(trimmed);
+    });
+    
+    if (relevantLines.length > 0) {
+      return {
+        extractedText: relevantLines.join('\n'),
+        confidence: 0.6
+      };
+    }
+    
+    return {
+      extractedText: apiResponse.trim(),
+      confidence: 0.3
+    };
+  }
+  
+  /**
+   * 前缀匹配提取（回退策略）
+   */
+  private extractByPrefixMatching(context: CompletionContext, apiResponse: string): {
+    text: string;
+  } {
+    // 简单策略：如果响应看起来完整，就使用，否则返回空
+    if (this.looksLikeCompleteCode(apiResponse)) {
+      return { text: apiResponse.trim() };
+    }
+    
+    return { text: '' };
   }
   
   /**

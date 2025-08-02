@@ -60,7 +60,7 @@ export class ConnectRpcClient {
     const headers: Record<string, string> = {
       'Authorization': `Bearer ${this.authToken}`,
       'x-client-key': this.clientKey,
-      'User-Agent': 'Cometix-Tab-Extension/0.1.0',
+      'User-Agent': 'connectrpc/1.6.1',
       'Accept': 'application/json, application/proto',
     };
 

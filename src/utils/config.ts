@@ -22,7 +22,14 @@ export class ConfigManager {
       model: config.get('model', 'auto'),
       snoozeUntil: config.get('snoozeUntil', 0),
       maxCompletionLength: config.get('maxCompletionLength', 1000),
-      debounceMs: config.get('debounceMs', 300)
+      debounceMs: config.get('debounceMs', 300),
+      logLevel: config.get('logLevel', 'info'),
+      triggerConfig: config.get('triggerConfig', {
+        commaTriggersCompletion: true,
+        newLineHighConfidence: true,
+        lineEndHighConfidence: true,
+        customTriggerChars: []
+      })
     };
   }
   
