@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { ConfigManager } from '../utils/config';
 import { Logger } from '../utils/logger';
-import { EnhancedHoverManager } from './enhanced-hover-manager';
+import { MenuPanel } from './menu-panel';
 
 export enum StatusBarState {
   Idle = 'idle',
@@ -19,9 +19,9 @@ interface StatusBarConfig {
   command: string;
 }
 
-export class EnhancedStatusBar {
+export class StatusBar {
   private statusBarItem: vscode.StatusBarItem;
-  private hoverManager: EnhancedHoverManager;
+  private menuPanel: MenuPanel;
   private disposables: vscode.Disposable[] = [];
   private logger = Logger.getInstance();
   private currentState: StatusBarState = StatusBarState.Idle;
@@ -34,8 +34,8 @@ export class EnhancedStatusBar {
       100
     );
     
-    // 初始化hover管理器
-    this.hoverManager = EnhancedHoverManager.getInstance(context);
+    // 初始化菜单面板
+    this.menuPanel = MenuPanel.getInstance(context);
     
     // 设置基本配置
     this.setupStatusBar();
@@ -49,23 +49,23 @@ export class EnhancedStatusBar {
     // 显示状态栏
     this.statusBarItem.show();
     
-    this.logger.info('EnhancedStatusBar initialized');
+    this.logger.info('StatusBar initialized');
   }
 
   /**
    * 设置状态栏基本配置
    */
   private setupStatusBar(): void {
-    // 设置点击命令 - 显示增强hover
-    this.statusBarItem.command = 'cometix-tab.showEnhancedHover';
+    // 设置点击命令 - 显示菜单面板
+    this.statusBarItem.command = 'cometix-tab.showMenuPanel';
     
-    // 注册hover显示命令
-    const showHoverCommand = vscode.commands.registerCommand(
-      'cometix-tab.showEnhancedHover', 
-      () => this.showEnhancedHover()
+    // 注册菜单显示命令
+    const showMenuCommand = vscode.commands.registerCommand(
+      'cometix-tab.showMenuPanel', 
+      () => this.showMenuPanel()
     );
     
-    this.disposables.push(showHoverCommand);
+    this.disposables.push(showMenuCommand);
   }
 
   /**
@@ -97,14 +97,14 @@ export class EnhancedStatusBar {
   }
 
   /**
-   * 显示增强hover容器
+   * 显示菜单面板
    */
-  private async showEnhancedHover(): Promise<void> {
+  private async showMenuPanel(): Promise<void> {
     try {
-      await this.hoverManager.showEnhancedHover();
-      this.logger.debug('Enhanced hover displayed');
+      await this.menuPanel.showMenuPanel();
+      this.logger.debug('Menu panel displayed');
     } catch (error) {
-      this.logger.error('Failed to show enhanced hover', error as Error);
+      this.logger.error('Failed to show menu panel', error as Error);
       vscode.window.showErrorMessage('无法显示菜单，请检查日志');
     }
   }
@@ -179,7 +179,7 @@ export class EnhancedStatusBar {
    */
   private getStatusConfig(state: StatusBarState, config: any): StatusBarConfig {
     const baseConfig = {
-      command: 'cometix-tab.showEnhancedHover'
+      command: 'cometix-tab.showMenuPanel'
     };
 
     switch (state) {
@@ -277,7 +277,7 @@ export class EnhancedStatusBar {
       text: '$(sync~spin) Cometix Tab',
       icon: 'sync',
       tooltip: this.buildTooltip(message, ConfigManager.getConfig()),
-      command: 'cometix-tab.showEnhancedHover',
+      command: 'cometix-tab.showMenuPanel',
       color: new vscode.ThemeColor('statusBarItem.activeBackground')
     };
     
@@ -293,7 +293,7 @@ export class EnhancedStatusBar {
       text: '$(alert) Cometix Tab',
       icon: 'alert',
       tooltip: this.buildTooltip(message, ConfigManager.getConfig()),
-      command: 'cometix-tab.showEnhancedHover',
+      command: 'cometix-tab.showMenuPanel',
       color: new vscode.ThemeColor('statusBarItem.errorBackground')
     };
     
@@ -393,7 +393,7 @@ export class EnhancedStatusBar {
     // 释放状态栏项目
     this.statusBarItem.dispose();
     
-    this.logger.info('EnhancedStatusBar disposed');
+    this.logger.info('StatusBar disposed');
   }
 
   /**

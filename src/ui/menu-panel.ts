@@ -15,24 +15,23 @@ interface StatusInfo {
   lastUpdate: Date;
 }
 
-export class EnhancedHoverManager {
+export class MenuPanel {
   private static logger = Logger.getInstance();
-  private static instance: EnhancedHoverManager;
+  private static instance: MenuPanel;
   
   private constructor(private context: vscode.ExtensionContext) {}
   
-  public static getInstance(context?: vscode.ExtensionContext): EnhancedHoverManager {
-    if (!EnhancedHoverManager.instance && context) {
-      EnhancedHoverManager.instance = new EnhancedHoverManager(context);
+  public static getInstance(context?: vscode.ExtensionContext): MenuPanel {
+    if (!MenuPanel.instance && context) {
+      MenuPanel.instance = new MenuPanel(context);
     }
-    return EnhancedHoverManager.instance;
+    return MenuPanel.instance;
   }
 
   /**
-   * 显示增强的悬浮容器
-   * 模拟VSCode原生的workbench-hover效果
+   * 显示状态菜单面板
    */
-  public async showEnhancedHover(): Promise<void> {
+  public async showMenuPanel(): Promise<void> {
     const quickPick = vscode.window.createQuickPick<QuickActionItem>();
     
     // 配置增强的视觉效果
@@ -45,11 +44,11 @@ export class EnhancedHoverManager {
     this.configureInteractions(quickPick);
     
     quickPick.show();
-    EnhancedHoverManager.logger.debug('Enhanced hover container displayed');
+    MenuPanel.logger.debug('Menu panel displayed');
   }
 
   /**
-   * 配置增强的外观，模拟原生hover容器
+   * 配置菜单外观
    */
   private configureEnhancedAppearance(quickPick: vscode.QuickPick<QuickActionItem>): void {
     const config = ConfigManager.getConfig();
@@ -70,7 +69,7 @@ export class EnhancedHoverManager {
   }
 
   /**
-   * 构建分层内容，模拟workbench-hover的复杂结构
+   * 构建菜单内容
    */
   private async buildLayeredContent(): Promise<QuickActionItem[]> {
     const items: QuickActionItem[] = [];
@@ -208,7 +207,7 @@ export class EnhancedHoverManager {
       await this.executeAction(selected.action, selected.args);
       quickPick.hide();
     } catch (error) {
-      EnhancedHoverManager.logger.error('Action execution failed', error as Error);
+      MenuPanel.logger.error('Action execution failed', error as Error);
       vscode.window.showErrorMessage(`操作失败: ${error}`);
     }
   }
@@ -257,7 +256,7 @@ export class EnhancedHoverManager {
         break;
         
       default:
-        EnhancedHoverManager.logger.warn(`Unknown action: ${action}`);
+        MenuPanel.logger.warn(`Unknown action: ${action}`);
     }
   }
 
@@ -267,7 +266,7 @@ export class EnhancedHoverManager {
   private setupAutoClose(quickPick: vscode.QuickPick<QuickActionItem>): void {
     // 失焦时自动关闭
     quickPick.onDidHide(() => {
-      EnhancedHoverManager.logger.debug('Enhanced hover hidden');
+      MenuPanel.logger.debug('Menu panel hidden');
     });
     
     // 设置定时器，模拟hover的自动关闭行为
