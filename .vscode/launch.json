@@ -11,7 +11,7 @@
 			"request": "launch",
 			"args": [
 				"--extensionDevelopmentPath=${workspaceFolder}",
-				"--enable-proposed-api=Haleclipse.cometix-tab"
+				"--enable-proposed-api=GitHub.copilot-nightly"
 			],
 			"outFiles": [
 				"${workspaceFolder}/dist/**/*.js"
