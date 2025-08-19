@@ -48,8 +48,8 @@ jobs:
       - name: Create variant directory
         run: |
           mkdir -p variants/${{ matrix.plugin_name }}
-          cp -r . variants/${{ matrix.plugin_name }}/
-          cd variants/${{ matrix.plugin_name }}
+          # Copy all files and directories except the variants directory itself
+          find . -maxdepth 1 -not -name '.' -not -name 'variants' -exec cp -r {} variants/${{ matrix.plugin_name }}/ \;
 
       - name: Modify package.json
         run: |
