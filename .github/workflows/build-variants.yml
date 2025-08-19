@@ -1,0 +1,117 @@
+name: Build Extension Variants
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+jobs:
+  build-variants:
+    runs-on: ubuntu-latest
+    
+    strategy:
+      matrix:
+        include:
+          - plugin_id: "VisualStudioExptTeam.vscodeintellicode-completions"
+            plugin_name: "vscodeintellicode-completions"
+            plugin_author: "VisualStudioExptTeam"
+          - plugin_id: "GitHub.copilot"
+            plugin_name: "copilot"
+            plugin_author: "GitHub"
+          - plugin_id: "GitHub.copilot-chat"
+            plugin_name: "copilot-chat"
+            plugin_author: "GitHub"
+          - plugin_id: "ms-dotnettools.csdevkit"
+            plugin_name: "csdevkit"
+            plugin_author: "ms-dotnettools"
+          - plugin_id: "ms-dotnettools.vscodeintellicode-csharp"
+            plugin_name: "vscodeintellicode-csharp"
+            plugin_author: "ms-dotnettools"
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: '10.12.4'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Create variant directory
+        run: |
+          mkdir -p variants/${{ matrix.plugin_name }}
+          cp -r . variants/${{ matrix.plugin_name }}/
+          cd variants/${{ matrix.plugin_name }}
+
+      - name: Modify package.json
+        run: |
+          cd variants/${{ matrix.plugin_name }}
+          # Update name to match plugin
+          jq '.name = "${{ matrix.plugin_name }}"' package.json > tmp.json && mv tmp.json package.json
+          # Update publisher
+          jq '.publisher = "${{ matrix.plugin_author }}"' package.json > tmp.json && mv tmp.json package.json
+          # Update displayName to include variant info
+          jq '.displayName = "Cometix-Tab (${{ matrix.plugin_name }})"' package.json > tmp.json && mv tmp.json package.json
+
+      - name: Build extension
+        run: |
+          cd variants/${{ matrix.plugin_name }}
+          pnpm run package
+
+      - name: Package VSIX
+        run: |
+          cd variants/${{ matrix.plugin_name }}
+          pnpm run package:vsix
+
+      - name: Rename VSIX file
+        run: |
+          cd variants/${{ matrix.plugin_name }}/dist
+          # Find the generated VSIX file and rename it
+          VSIX_FILE=$(ls *.vsix | head -1)
+          if [ -n "$VSIX_FILE" ]; then
+            mv "$VSIX_FILE" "cometix-tab-${{ matrix.plugin_name }}.vsix"
+          fi
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cometix-tab-${{ matrix.plugin_name }}
+          path: variants/${{ matrix.plugin_name }}/dist/cometix-tab-${{ matrix.plugin_name }}.vsix
+          retention-days: 30
+
+  create-release-summary:
+    needs: build-variants
+    runs-on: ubuntu-latest
+    if: success()
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create build summary
+        run: |
+          echo "# Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Successfully built the following extension variants:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Plugin ID | Artifact Name |" >> $GITHUB_STEP_SUMMARY
+          echo "|-----------|---------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| VisualStudioExptTeam.vscodeintellicode-completions | cometix-tab-vscodeintellicode-completions |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub.copilot | cometix-tab-copilot |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub.copilot-chat | cometix-tab-copilot-chat |" >> $GITHUB_STEP_SUMMARY
+          echo "| ms-dotnettools.csdevkit | cometix-tab-csdevkit |" >> $GITHUB_STEP_SUMMARY
+          echo "| ms-dotnettools.vscodeintellicode-csharp | cometix-tab-vscodeintellicode-csharp |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "All VSIX files are available as GitHub Actions artifacts and can be downloaded from the Actions tab." >> $GITHUB_STEP_SUMMARY
