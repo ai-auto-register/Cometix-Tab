@@ -23,6 +23,9 @@ jobs:
           - plugin_id: "GitHub.copilot-chat"
             plugin_name: "copilot-chat"
             plugin_author: "GitHub"
+          - plugin_id: "GitHub.copilot-nightly"
+            plugin_name: "copilot-nightly"
+            plugin_author: "GitHub"
           - plugin_id: "ms-dotnettools.csdevkit"
             plugin_name: "csdevkit"
             plugin_author: "ms-dotnettools"
@@ -37,12 +40,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '20'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: '10.12.4'
 
       - name: Install dependencies
         run: pnpm install
@@ -50,8 +51,8 @@ jobs:
       - name: Create variant directory
         run: |
           mkdir -p variants/${{ matrix.plugin_name }}
-          cp -r . variants/${{ matrix.plugin_name }}/
-          cd variants/${{ matrix.plugin_name }}
+          # Copy all files and directories except the variants directory itself
+          find . -maxdepth 1 -not -name '.' -not -name 'variants' -exec cp -r {} variants/${{ matrix.plugin_name }}/ \;
 
       - name: Modify package.json
         run: |
@@ -111,6 +112,7 @@ jobs:
           echo "| VisualStudioExptTeam.vscodeintellicode-completions | cometix-tab-vscodeintellicode-completions |" >> $GITHUB_STEP_SUMMARY
           echo "| GitHub.copilot | cometix-tab-copilot |" >> $GITHUB_STEP_SUMMARY
           echo "| GitHub.copilot-chat | cometix-tab-copilot-chat |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub.copilot-nightly | cometix-tab-copilot-nightly |" >> $GITHUB_STEP_SUMMARY
           echo "| ms-dotnettools.csdevkit | cometix-tab-csdevkit |" >> $GITHUB_STEP_SUMMARY
           echo "| ms-dotnettools.vscodeintellicode-csharp | cometix-tab-vscodeintellicode-csharp |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
