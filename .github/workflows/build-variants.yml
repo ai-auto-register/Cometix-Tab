@@ -23,6 +23,9 @@ jobs:
           - plugin_id: "GitHub.copilot-chat"
             plugin_name: "copilot-chat"
             plugin_author: "GitHub"
+          - plugin_id: "GitHub.copilot-nightly"
+            plugin_name: "copilot-nightly"
+            plugin_author: "GitHub"
           - plugin_id: "ms-dotnettools.csdevkit"
             plugin_name: "csdevkit"
             plugin_author: "ms-dotnettools"
@@ -109,6 +112,7 @@ jobs:
           echo "| VisualStudioExptTeam.vscodeintellicode-completions | cometix-tab-vscodeintellicode-completions |" >> $GITHUB_STEP_SUMMARY
           echo "| GitHub.copilot | cometix-tab-copilot |" >> $GITHUB_STEP_SUMMARY
           echo "| GitHub.copilot-chat | cometix-tab-copilot-chat |" >> $GITHUB_STEP_SUMMARY
+          echo "| GitHub.copilot-nightly | cometix-tab-copilot-nightly |" >> $GITHUB_STEP_SUMMARY
           echo "| ms-dotnettools.csdevkit | cometix-tab-csdevkit |" >> $GITHUB_STEP_SUMMARY
           echo "| ms-dotnettools.vscodeintellicode-csharp | cometix-tab-vscodeintellicode-csharp |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
