@@ -179,7 +179,7 @@ async function tryElevatedPatch(
         if (stdout && stdout.includes('SUCCESS')) {
           resolve({ success: true, message: '已成功修改 product.json 并创建备份', path: productPath });
         } else {
-          resolve({ success: false, message: '修改时发生错误', error: new Error(stderr || '未知错误') });
+          resolve({ success: false, message: '修改时发生错误', error: new Error(String(stderr || '未知错误')) });
         }
       });
     } catch (error) {
