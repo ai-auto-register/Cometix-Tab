@@ -10,7 +10,7 @@ on:
 jobs:
   build-variants:
     runs-on: ubuntu-latest
-    
+
     strategy:
       matrix:
         include:
@@ -64,10 +64,10 @@ jobs:
           # Update displayName to include variant info
           jq '.displayName = "Cometix-Tab (${{ matrix.plugin_name }})"' package.json > tmp.json && mv tmp.json package.json
 
-      - name: Build extension
+      - name: Build extension (variants, disable product.json patch)
         run: |
           cd variants/${{ matrix.plugin_name }}
-          pnpm run package
+          DISABLE_PRODUCT_PATCH=1 pnpm run package
 
       - name: Package VSIX
         run: |
@@ -94,7 +94,7 @@ jobs:
     needs: build-variants
     runs-on: ubuntu-latest
     if: success()
-    
+
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -117,3 +117,46 @@ jobs:
           echo "| ms-dotnettools.vscodeintellicode-csharp | cometix-tab-vscodeintellicode-csharp |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "All VSIX files are available as GitHub Actions artifacts and can be downloaded from the Actions tab." >> $GITHUB_STEP_SUMMARY
+
+
+  build-original-id:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Restore original ID in package.json
+        run: |
+          jq '.name = "cometix-tab" | .publisher = "Haleclipse" | .displayName = "Cometix-Tab"' package.json > tmp.json && mv tmp.json package.json
+
+      - name: Build (product.json patcher enabled by default)
+        run: pnpm run package
+
+      - name: Package VSIX
+        run: pnpm run package:vsix
+
+      - name: Rename VSIX file
+        run: |
+          cd dist
+          VSIX_FILE=$(ls *.vsix | head -1)
+          if [ -n "$VSIX_FILE" ]; then
+            mv "$VSIX_FILE" "cometix-tab-original.vsix"
+          fi
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cometix-tab-original
+          path: dist/cometix-tab-original.vsix
+          retention-days: 30

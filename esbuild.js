@@ -24,6 +24,7 @@ const esbuildProblemMatcherPlugin = {
 };
 
 async function main() {
+	const enableProductPatch = !process.env.DISABLE_PRODUCT_PATCH; // default enabled
 	const ctx = await esbuild.context({
 		entryPoints: [
 			'src/extension.ts'
@@ -36,6 +37,9 @@ async function main() {
 		platform: 'node',
 		outfile: 'dist/extension.js',
 		external: ['vscode'],
+		define: {
+			'process.env.ENABLE_PRODUCT_PATCH': JSON.stringify(String(enableProductPatch)),
+		},
 		logLevel: 'silent',
 		plugins: [
 			/* add to the end of plugins array */
