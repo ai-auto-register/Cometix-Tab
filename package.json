@@ -1,8 +1,8 @@
 {
-  "name": "copilot-nightly",
+  "name": "cometix-tab",
   "displayName": "Cometix-Tab",
   "description": "Cursor AI",
-  "publisher": "GitHub",
+  "publisher": "Haleclipse",
   "icon": "icons/icon.png",
   "repository": {
     "type": "git",
