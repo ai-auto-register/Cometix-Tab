@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as fs from 'node:fs/promises';
 import * as fssync from 'node:fs';
 import * as path from 'node:path';
+import { showPermissionErrorRestartPrompt, showPatchSuccessRestartPrompt } from './restart-helper';
 
 export interface PatchResult {
   success: boolean;
@@ -132,13 +133,18 @@ export async function promptAndPatchIfNeeded(
 
   const res = await ensureApiProposalsEnabled(extensionId, proposals);
   if (res.success) {
-    vscode.window.showInformationMessage(`✅ ${res.message}${res.path ? `: ${res.path}` : ''}`);
+    // 成功时显示重启提示
+    await showPatchSuccessRestartPrompt(res.path);
   } else {
-    const detail = isPermissionError(res.error)
-      ? '请以管理员/root 权限启动 VS Code 再试。'
-      : '请检查发行版 product.json 路径或权限。';
-    vscode.window.showErrorMessage(`❌ ${res.message}`, { modal: false }, '查看详情').then(() => {});
-    vscode.window.showInformationMessage(detail);
+    if (isPermissionError(res.error)) {
+      // 权限错误时显示重启指导
+      await showPermissionErrorRestartPrompt();
+    } else {
+      // 其他错误的传统处理方式
+      const detail = '请检查发行版 product.json 路径或权限。';
+      vscode.window.showErrorMessage(`❌ ${res.message}`, { modal: false }, '查看详情').then(() => {});
+      vscode.window.showInformationMessage(detail);
+    }
   }
 }
 
