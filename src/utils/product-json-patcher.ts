@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import * as os from 'node:os';
 import * as sudo from '@vscode/sudo-prompt';
 import { Logger } from './logger';
 
@@ -174,7 +175,20 @@ async function tryElevatedPatch(
       logger.info(`💾 备份路径: ${backupPath}`);
       logger.debug(`📄 新内容长度: ${newContent.length} 字符`);
 
-      // 构建跨平台命令
+      // 先用 Node.js fs API 写入临时文件
+      const tempPath = path.join(os.tmpdir(), `product-${Date.now()}.json`);
+      logger.info(`📁 临时文件路径: ${tempPath}`);
+
+      try {
+        await fs.writeFile(tempPath, newContent, 'utf8');
+        logger.info('✅ 临时文件写入成功');
+      } catch (tempError) {
+        logger.error('❌ 临时文件写入失败', tempError as Error);
+        resolve({ success: false, message: '临时文件创建失败', error: tempError });
+        return;
+      }
+
+      // 构建跨平台复制命令（只做复制操作）
       const platform = process.platform;
       logger.info(`🖥️ 检测到平台: ${platform}`);
       let command: string;
@@ -182,25 +196,31 @@ async function tryElevatedPatch(
       if (platform === 'win32') {
         const escapedProductPath = productPath.replace(/'/g, "''");
         const escapedBackupPath = backupPath.replace(/'/g, "''");
-        const escapedContent = newContent.replace(/'/g, "''").replace(/\r?\n/g, '`n');
+        const escapedTempPath = tempPath.replace(/'/g, "''");
 
-        command = `powershell -Command "try { Copy-Item '${escapedProductPath}' '${escapedBackupPath}' -ErrorAction SilentlyContinue; Set-Content -Path '${escapedProductPath}' -Value '${escapedContent}' -Encoding UTF8; Write-Host 'SUCCESS' } catch { Write-Host 'ERROR:' $_.Exception.Message }"`;
-        logger.info('🪟 构建 Windows PowerShell 命令');
+        command = `powershell -Command "try { Copy-Item '${escapedProductPath}' '${escapedBackupPath}' -ErrorAction SilentlyContinue; Copy-Item '${escapedTempPath}' '${escapedProductPath}' -Force } catch { Write-Host 'ERROR:' $_.Exception.Message }"`;
       } else {
         const escapedProductPath = productPath.replace(/'/g, "'\"'\"'");
         const escapedBackupPath = backupPath.replace(/'/g, "'\"'\"'");
-        const escapedContent = newContent.replace(/'/g, "'\"'\"'");
+        const escapedTempPath = tempPath.replace(/'/g, "'\"'\"'");
 
-        command = `sh -c "cp '${escapedProductPath}' '${escapedBackupPath}' 2>/dev/null || true && echo '${escapedContent}' > '${escapedProductPath}' && echo 'SUCCESS'"`;
-        logger.info('🐧 构建 Unix/Linux shell 命令');
+        command = `sh -c "cp '${escapedProductPath}' '${escapedBackupPath}' 2>/dev/null || true && cp '${escapedTempPath}' '${escapedProductPath}'"`;
       }
 
       logger.debug(`🔧 执行命令: ${command.substring(0, 100)}...`);
 
       logger.info('🔐 开始执行权限提升命令...');
 
-      sudo.exec(command, { name: 'Cometix Tab - 修改 VS Code 配置' }, (error, stdout, stderr) => {
+      sudo.exec(command, { name: 'Cometix Tab - 修改 VS Code 配置' }, async (error, stdout, stderr) => {
         logger.info('📋 权限提升命令执行完成');
+
+        // 清理临时文件
+        try {
+          await fs.unlink(tempPath);
+          logger.info('🗑️ 临时文件清理成功');
+        } catch (cleanupError) {
+          logger.warn('⚠️ 临时文件清理失败', cleanupError);
+        }
 
         if (error) {
           logger.error('❌ 权限提升失败', error);
@@ -218,14 +238,14 @@ async function tryElevatedPatch(
         logger.debug(`📤 stdout: ${stdout || '无输出'}`);
         logger.debug(`📤 stderr: ${stderr || '无错误输出'}`);
 
-        if (stdout && stdout.includes('SUCCESS')) {
+        // 检查是否有错误输出
+        if (stderr && stderr.includes('ERROR:')) {
+          logger.error('❌ 修改过程中发生错误');
+          logger.error(`📤 错误输出: ${stderr}`);
+          resolve({ success: false, message: '修改时发生错误', error: new Error(String(stderr)) });
+        } else {
           logger.info('🎉 product.json 修改成功！');
           resolve({ success: true, message: '已成功修改 product.json 并创建备份', path: productPath });
-        } else {
-          logger.error('❌ 修改失败，未检测到成功标志');
-          logger.error(`📤 实际输出: ${stdout || '无输出'}`);
-          logger.error(`📤 错误输出: ${stderr || '无错误输出'}`);
-          resolve({ success: false, message: '修改时发生错误', error: new Error(String(stderr || '未知错误')) });
         }
       });
     } catch (error) {
