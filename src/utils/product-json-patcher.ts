@@ -211,7 +211,7 @@ async function tryElevatedPatch(
 
       logger.info('🔐 开始执行权限提升命令...');
 
-      sudo.exec(command, { name: 'Cometix Tab - 修改 VS Code 配置' }, async (error, stdout, stderr) => {
+      sudo.exec(command, { name: 'Cometix Tab VS Code Configuration' }, async (error, stdout, stderr) => {
         logger.info('📋 权限提升命令执行完成');
 
         // 清理临时文件
