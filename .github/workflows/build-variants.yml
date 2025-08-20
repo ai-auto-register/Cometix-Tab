@@ -136,10 +136,6 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
-      - name: Restore original ID in package.json
-        run: |
-          jq '.name = "cometix-tab" | .publisher = "Haleclipse" | .displayName = "Cometix-Tab"' package.json > tmp.json && mv tmp.json package.json
-
       - name: Build (product.json patcher enabled by default)
         run: pnpm run package
 
