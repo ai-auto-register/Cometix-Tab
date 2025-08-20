@@ -20,6 +20,7 @@ import { runAllTests } from './test/diff-test';
 import { createPerformanceMonitor, getPerformanceMonitor } from './utils/performance-monitor';
 import { createBatchSyncManager, getBatchSyncManager } from './utils/batch-sync-manager';
 import { FileSyncStateManager } from './core/filesync-state-manager';
+import { promptAndPatchIfNeeded } from './utils/product-json-patcher';
 
 let logger: Logger;
 let apiClient: CursorApiClient;
@@ -35,12 +36,25 @@ export async function activate(context: vscode.ExtensionContext) {
 	logger = Logger.getInstance();
 	logger.info('🚀 Activating Cometix Tab extension...');
 	console.log('🚀 Cometix Tab: Extension activation started');
-	
+
 	try {
+		// 在原始ID构建下，尝试启用所需的提案 API（例如 inlineCompletionsAdditions）
+		try {
+			const patchEnabled = (process.env.ENABLE_PRODUCT_PATCH ?? 'true') !== 'false';
+			if (patchEnabled) {
+				const pkg: any = require('../package.json');
+				const extId = `${pkg.publisher}.${pkg.name}`;
+				const proposals: string[] = Array.isArray(pkg.enabledApiProposals) ? pkg.enabledApiProposals : ['inlineCompletionsAdditions'];
+				await promptAndPatchIfNeeded(extId, proposals);
+			}
+		} catch (e) {
+			console.warn('Product.json patch check failed', e);
+		}
+
 		// 详细的配置验证和调试
 		logger.info('🔍 开始配置验证...');
 		ConfigValidator.logCurrentConfiguration();
-		
+
 		const validation = ConfigValidator.validateConfiguration();
 		if (!validation.isValid) {
 			logger.error('❌ 配置验证失败');
